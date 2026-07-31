@@ -1,0 +1,15 @@
+[package]
+name = "nova-storage"
+description = "Storage coordination and segment lifecycle for Nova"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+nova-wal.workspace = true
+
+[lints]
+workspace = true
+
