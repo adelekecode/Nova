@@ -47,6 +47,21 @@ pub enum ParseError {
     InvalidNumber,
 }
 
+impl ParseError {
+    /// A stable, machine-readable identifier for this error, suitable for wire responses and
+    /// client-side matching. Unlike the [`std::fmt::Display`] message, this string does not
+    /// change across releases.
+    #[must_use]
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::UnknownCommand => "UNKNOWN_COMMAND",
+            Self::WrongArity => "WRONG_ARITY",
+            Self::InvalidMetric => "INVALID_METRIC",
+            Self::InvalidNumber => "INVALID_NUMBER",
+        }
+    }
+}
+
 /// Parses a single newline-delimited command.
 ///
 /// # Errors
@@ -96,5 +111,13 @@ mod tests {
     #[test]
     fn rejects_bad_arity() {
         assert_eq!(parse("RANGE cpu 1"), Err(ParseError::WrongArity));
+    }
+
+    #[test]
+    fn error_codes_are_stable() {
+        assert_eq!(ParseError::UnknownCommand.code(), "UNKNOWN_COMMAND");
+        assert_eq!(ParseError::WrongArity.code(), "WRONG_ARITY");
+        assert_eq!(ParseError::InvalidMetric.code(), "INVALID_METRIC");
+        assert_eq!(ParseError::InvalidNumber.code(), "INVALID_NUMBER");
     }
 }

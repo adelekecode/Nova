@@ -39,6 +39,20 @@ pub enum WalError {
     InvalidMetric,
 }
 
+impl WalError {
+    /// A stable, machine-readable identifier for this error, suitable for wire responses and
+    /// client-side matching. Unlike the [`std::fmt::Display`] message, this string does not
+    /// change across releases.
+    #[must_use]
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::Io(_) => "IO",
+            Self::Corrupt(_) => "CORRUPT",
+            Self::InvalidMetric => "INVALID_METRIC",
+        }
+    }
+}
+
 impl Wal {
     /// Opens or creates a WAL file.
     ///
@@ -168,7 +182,15 @@ mod tests {
     use nova_types::{MetricName, Point};
     use tempfile::tempdir;
 
-    use super::Wal;
+    use super::{Wal, WalError};
+
+    #[test]
+    fn error_codes_are_stable() {
+        assert_eq!(WalError::Corrupt("bad frame").code(), "CORRUPT");
+        assert_eq!(WalError::InvalidMetric.code(), "INVALID_METRIC");
+        let io_error = std::io::Error::other("disk full");
+        assert_eq!(WalError::Io(io_error).code(), "IO");
+    }
 
     #[test]
     fn round_trips_records() {

@@ -27,6 +27,19 @@ pub enum EngineError {
     InvalidRange,
 }
 
+impl EngineError {
+    /// A stable, machine-readable identifier for this error, suitable for wire responses and
+    /// client-side matching. Unlike the [`std::fmt::Display`] message, this string does not
+    /// change across releases.
+    #[must_use]
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::Wal(error) => error.code(),
+            Self::InvalidRange => "INVALID_RANGE",
+        }
+    }
+}
+
 impl Engine {
     /// Opens an engine and rebuilds its in-memory index from the WAL.
     ///
@@ -51,7 +64,13 @@ impl Engine {
         })
     }
 
-    /// Durably writes a point. Writing the same timestamp replaces the visible value.
+    /// Durably writes a point.
+    ///
+    /// A write is an upsert keyed on `(metric, timestamp)`: writing the same timestamp again
+    /// replaces the previously visible value, and the point count does not grow. Points may be
+    /// written in any timestamp order — Nova does not require monotonically increasing
+    /// timestamps per metric, and [`Engine::range`] always returns results in ascending
+    /// timestamp order regardless of the order they were written in or replayed from the WAL.
     ///
     /// # Errors
     ///
@@ -109,10 +128,20 @@ impl Engine {
 
 #[cfg(test)]
 mod tests {
+    use nova_storage::WalError;
     use nova_types::{MetricName, Point};
     use tempfile::tempdir;
 
-    use super::Engine;
+    use super::{Engine, EngineError};
+
+    #[test]
+    fn error_codes_are_stable() {
+        assert_eq!(EngineError::InvalidRange.code(), "INVALID_RANGE");
+        assert_eq!(
+            EngineError::from(WalError::InvalidMetric).code(),
+            "INVALID_METRIC"
+        );
+    }
 
     #[test]
     fn survives_restart_and_reads_ranges() {
@@ -135,6 +164,76 @@ mod tests {
         assert_eq!(
             engine.range(&metric, 150, 300).unwrap(),
             vec![Point::new(200, 21.5), Point::new(300, 23.0)]
+        );
+        assert_eq!(engine.point_count(), 3);
+    }
+
+    #[test]
+    fn duplicate_timestamp_upserts_the_value() {
+        let directory = tempdir().unwrap();
+        let metric = MetricName::new("temperature").unwrap();
+        let mut engine = Engine::open(directory.path()).unwrap();
+
+        engine
+            .write(metric.clone(), &Point::new(100, 20.0))
+            .unwrap();
+        engine
+            .write(metric.clone(), &Point::new(100, 99.0))
+            .unwrap();
+
+        assert_eq!(
+            engine.range(&metric, 0, 200).unwrap(),
+            vec![Point::new(100, 99.0)]
+        );
+        assert_eq!(engine.point_count(), 1);
+    }
+
+    #[test]
+    fn out_of_order_writes_are_returned_in_timestamp_order() {
+        let directory = tempdir().unwrap();
+        let metric = MetricName::new("temperature").unwrap();
+        let mut engine = Engine::open(directory.path()).unwrap();
+
+        engine
+            .write(metric.clone(), &Point::new(300, 3.0))
+            .unwrap();
+        engine
+            .write(metric.clone(), &Point::new(100, 1.0))
+            .unwrap();
+        engine
+            .write(metric.clone(), &Point::new(200, 2.0))
+            .unwrap();
+
+        assert_eq!(
+            engine.range(&metric, 0, 400).unwrap(),
+            vec![Point::new(100, 1.0), Point::new(200, 2.0), Point::new(300, 3.0)]
+        );
+    }
+
+    #[test]
+    fn duplicate_and_out_of_order_writes_survive_restart() {
+        let directory = tempdir().unwrap();
+        let metric = MetricName::new("temperature").unwrap();
+        {
+            let mut engine = Engine::open(directory.path()).unwrap();
+            engine
+                .write(metric.clone(), &Point::new(300, 3.0))
+                .unwrap();
+            engine
+                .write(metric.clone(), &Point::new(100, 1.0))
+                .unwrap();
+            engine
+                .write(metric.clone(), &Point::new(100, 99.0))
+                .unwrap();
+            engine
+                .write(metric.clone(), &Point::new(200, 2.0))
+                .unwrap();
+        }
+
+        let engine = Engine::open(directory.path()).unwrap();
+        assert_eq!(
+            engine.range(&metric, 0, 400).unwrap(),
+            vec![Point::new(100, 99.0), Point::new(200, 2.0), Point::new(300, 3.0)]
         );
         assert_eq!(engine.point_count(), 3);
     }

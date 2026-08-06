@@ -148,7 +148,7 @@ Start the server:
 cargo run -p nova-server
 ```
 
-Then use the CLI from another terminal:
+Then use the CLI from another terminal, either one command at a time:
 
 ```bash
 cargo run -p nova-cli -- PING
@@ -157,21 +157,50 @@ cargo run -p nova-cli -- RANGE cpu.usage 0 1800000000000
 cargo run -p nova-cli -- INFO
 ```
 
+or interactively, similar to `redis-cli`:
+
+```bash
+cargo run -p nova-cli
+nova> PING
+PONG
+nova> WRITE cpu.usage 1700000000000 42.5
+OK
+```
+
 Nova listens on `127.0.0.1:7422` and stores data under `./nova-data` by default. Use `--listen`
-and `--data-dir` to change those values.
+and `--data-dir` to change those values. Pass `--no-banner` to `nova-server` to suppress the
+startup banner.
 
 ## Current protocol
 
 | Command | Meaning |
 | --- | --- |
 | `PING` | Check server health |
-| `WRITE <metric> <timestamp-ms> <value>` | Durably append one point |
+| `WRITE <metric> <timestamp-ms> <value>` | Durably write one point |
 | `RANGE <metric> <start-ms> <end-ms>` | Read an inclusive time range |
-| `INFO` | Show metric and point counts |
+| `INFO` | Show version, build, and metric/point counts |
 
 Commands and responses are newline-delimited. This intentionally small protocol gives the engine
 a testable interface while its semantics mature. RESP3 and ecosystem-compatible ingestion
 interfaces will be evaluated in later milestones.
+
+`WRITE` is an upsert keyed on `(metric, timestamp)`: writing an existing timestamp again replaces
+the previously visible value. Points may be written in any timestamp order — Nova does not require
+monotonically increasing timestamps per metric — and `RANGE` always returns results in ascending
+timestamp order regardless of the order they were written or replayed from the WAL in.
+
+Failures respond with `ERR <CODE> <message>`, where `<CODE>` is a stable, machine-readable
+identifier that a client can match on without parsing the human-readable message:
+
+| Code | Meaning |
+| --- | --- |
+| `UNKNOWN_COMMAND` | The command name isn't recognized |
+| `WRONG_ARITY` | The command was sent with the wrong number of arguments |
+| `INVALID_METRIC` | The metric name is empty, too long, or contains unsupported characters |
+| `INVALID_NUMBER` | A timestamp or value argument couldn't be parsed |
+| `INVALID_RANGE` | A `RANGE` request had `start` greater than `end` |
+| `CORRUPT` | The WAL contained a corrupt frame |
+| `IO` | A durable-storage I/O operation failed |
 
 ## Workspace
 
