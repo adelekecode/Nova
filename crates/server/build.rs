@@ -19,8 +19,7 @@ fn git_sha() -> String {
         .ok()
         .filter(|output| output.status.success())
         .and_then(|output| String::from_utf8(output.stdout).ok())
-        .map(|sha| sha.trim().to_owned())
-        .unwrap_or_else(|| "unknown".to_owned())
+        .map_or_else(|| "unknown".to_owned(), |sha| sha.trim().to_owned())
 }
 
 fn rustc_version() -> String {
