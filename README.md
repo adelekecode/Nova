@@ -148,7 +148,7 @@ Start the server:
 cargo run -p nova-server
 ```
 
-Then use the CLI from another terminal:
+Then use the CLI from another terminal, either one command at a time:
 
 ```bash
 cargo run -p nova-cli -- PING
@@ -157,8 +157,19 @@ cargo run -p nova-cli -- RANGE cpu.usage 0 1800000000000
 cargo run -p nova-cli -- INFO
 ```
 
+or interactively, similar to `redis-cli`:
+
+```bash
+cargo run -p nova-cli
+nova> PING
+PONG
+nova> WRITE cpu.usage 1700000000000 42.5
+OK
+```
+
 Nova listens on `127.0.0.1:7422` and stores data under `./nova-data` by default. Use `--listen`
-and `--data-dir` to change those values.
+and `--data-dir` to change those values. Pass `--no-banner` to `nova-server` to suppress the
+startup banner.
 
 ## Current protocol
 

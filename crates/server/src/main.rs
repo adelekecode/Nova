@@ -1,4 +1,8 @@
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    io::IsTerminal,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use anyhow::Context;
 use clap::Parser;
@@ -13,6 +17,8 @@ use tokio::{
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 #[derive(Debug, Parser)]
 #[command(name = "nova-server", version, about = "Nova time-series database")]
 struct Arguments {
@@ -22,6 +28,60 @@ struct Arguments {
     /// Directory containing durable Nova data.
     #[arg(long, default_value = "./nova-data", env = "NOVA_DATA_DIR")]
     data_dir: PathBuf,
+    /// Suppress the startup banner.
+    #[arg(long)]
+    no_banner: bool,
+}
+
+/// Prints a Redis-style startup banner to the terminal.
+///
+/// Padding is applied to the plain text first and only then wrapped in ANSI color codes, since
+/// escape sequences count toward a naive `{:<width}` fill and would otherwise throw off column
+/// alignment whenever color is enabled.
+fn print_banner(listen: &str, data_dir: &Path) {
+    let color = std::io::stdout().is_terminal();
+    let colorize = |code: &str, text: &str| -> String {
+        if color {
+            format!("\x1b[{code}m{text}\x1b[0m")
+        } else {
+            text.to_owned()
+        }
+    };
+
+    let art_lines: [&str; 8] = [
+        "",
+        "",
+        r"        \   |   /",
+        r"          \ | /",
+        r"  ---------(*)---------",
+        r"          / | \",
+        r"        /   |   \",
+        "",
+    ];
+    let info_lines = [
+        format!("Nova {VERSION}"),
+        "A Redis-inspired time-series database".to_owned(),
+        String::new(),
+        format!("Port       {listen}"),
+        format!("PID        {}", std::process::id()),
+        format!("Data dir   {}", data_dir.display()),
+        "Mode       standalone".to_owned(),
+        String::new(),
+    ];
+
+    println!();
+    for (index, (left, right)) in art_lines.iter().zip(info_lines.iter()).enumerate() {
+        let padded_left = format!("{left:<34}");
+        let styled_left = colorize("36", &padded_left);
+        let styled_right = if index == 0 {
+            colorize("1", right)
+        } else {
+            right.clone()
+        };
+        println!("{styled_left}{styled_right}");
+    }
+    println!("Ready to accept connections");
+    println!();
 }
 
 #[tokio::main]
@@ -37,6 +97,10 @@ async fn main() -> anyhow::Result<()> {
     let listener = TcpListener::bind(&arguments.listen)
         .await
         .with_context(|| format!("failed to bind {}", arguments.listen))?;
+
+    if !arguments.no_banner {
+        print_banner(&arguments.listen, &arguments.data_dir);
+    }
     info!(address = %arguments.listen, data_dir = %arguments.data_dir.display(), "Nova is ready");
 
     loop {

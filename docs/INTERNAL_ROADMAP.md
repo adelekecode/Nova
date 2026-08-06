@@ -1,0 +1,34 @@
+# Internal roadmap
+
+Working notes for in-progress and near-term development on the `dev` branch. This file tracks
+granular, fast-moving implementation tasks that don't belong in the public-facing `ROADMAP.md`
+(which is organized by capability milestone and exit criteria for external contributors).
+
+## Milestone 1 — durable single-node vertical slice (extended scope)
+
+### Tooling and developer experience (added)
+
+- [x] `nova-server` startup banner — version, listen address, PID, and data dir shown on launch
+- [x] `nova-cli` interactive REPL mode (connect once, issue multiple commands, like `redis-cli`)
+- [x] `nova-cli` colorized, pretty-printed responses (tables for `RANGE`, key/value for `INFO`)
+- [ ] `nova-cli` command history and line editing (currently plain stdin, no arrow-key recall)
+- [ ] `nova-cli` shorthand `-h`/`-p` host and port flags to match common client conventions
+
+### Still open from the original slice checklist (see `ROADMAP.md`)
+
+- [ ] End-to-end tests that launch the server and exercise real client connections
+- [ ] Clean shutdown with a final durability barrier
+- [ ] Torn/truncated WAL-tail detection and safe repair
+- [ ] Maximum frame, metric, request, and connection limits
+- [ ] Duplicate timestamp and out-of-order write semantics
+- [ ] Batch write command with atomicity rules
+- [ ] Config file plus environment and command-line precedence
+- [ ] Structured error codes rather than human-text-only errors
+- [ ] Version and build metadata in `INFO`
+- [ ] Graceful resource exhaustion behavior
+
+## Notes
+
+- This file is for internal tracking only and can be edited freely without going through the same
+  bar as `ROADMAP.md`.
+- Promote an item to `ROADMAP.md` once it's stable enough to be a public commitment.
