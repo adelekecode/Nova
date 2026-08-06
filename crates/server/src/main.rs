@@ -147,10 +147,17 @@ async fn handle_connection(stream: TcpStream, engine: Arc<Mutex<Engine>>) -> any
     Ok(())
 }
 
+/// Formats a wire error response as `ERR <CODE> <message>`, where `code` is a stable,
+/// machine-readable identifier (see each crate's `code()` method) and `message` is the
+/// human-readable [`std::fmt::Display`] text.
+fn err(code: &str, message: impl std::fmt::Display) -> String {
+    format!("ERR {code} {message}")
+}
+
 async fn execute(input: &str, engine: &Mutex<Engine>) -> String {
     let command = match parse(input) {
         Ok(command) => command,
-        Err(error) => return format!("ERR {error}"),
+        Err(error) => return err(error.code(), error),
     };
 
     match command {
@@ -165,7 +172,7 @@ async fn execute(input: &str, engine: &Mutex<Engine>) -> String {
             .write(metric, &Point::new(timestamp, value))
         {
             Ok(()) => "OK".to_owned(),
-            Err(error) => format!("ERR {error}"),
+            Err(error) => err(error.code(), error),
         },
         Command::Range { metric, start, end } => {
             match engine.lock().await.range(&metric, start, end) {
@@ -177,7 +184,7 @@ async fn execute(input: &str, engine: &Mutex<Engine>) -> String {
                         .join(";");
                     format!("POINTS {} {body}", points.len())
                 }
-                Err(error) => format!("ERR {error}"),
+                Err(error) => err(error.code(), error),
             }
         }
         Command::Info => {

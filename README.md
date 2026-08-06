@@ -189,6 +189,19 @@ the previously visible value. Points may be written in any timestamp order — N
 monotonically increasing timestamps per metric — and `RANGE` always returns results in ascending
 timestamp order regardless of the order they were written or replayed from the WAL in.
 
+Failures respond with `ERR <CODE> <message>`, where `<CODE>` is a stable, machine-readable
+identifier that a client can match on without parsing the human-readable message:
+
+| Code | Meaning |
+| --- | --- |
+| `UNKNOWN_COMMAND` | The command name isn't recognized |
+| `WRONG_ARITY` | The command was sent with the wrong number of arguments |
+| `INVALID_METRIC` | The metric name is empty, too long, or contains unsupported characters |
+| `INVALID_NUMBER` | A timestamp or value argument couldn't be parsed |
+| `INVALID_RANGE` | A `RANGE` request had `start` greater than `end` |
+| `CORRUPT` | The WAL contained a corrupt frame |
+| `IO` | A durable-storage I/O operation failed |
+
 ## Workspace
 
 ```text

@@ -26,7 +26,11 @@ granular, fast-moving implementation tasks that don't belong in the public-facin
   overwrite, out-of-order insertion, and both surviving a WAL-replay restart
 - [ ] Batch write command with atomicity rules
 - [ ] Config file plus environment and command-line precedence
-- [ ] Structured error codes rather than human-text-only errors
+- [x] Structured error codes rather than human-text-only errors — `ParseError`, `EngineError`,
+  and `WalError` each expose a `code()` method returning a stable `SCREAMING_SNAKE_CASE`
+  identifier (`UNKNOWN_COMMAND`, `WRONG_ARITY`, `INVALID_METRIC`, `INVALID_NUMBER`,
+  `INVALID_RANGE`, `CORRUPT`, `IO`); `nova-server` now replies `ERR <CODE> <message>` instead of
+  `ERR <message>`, documented in the README protocol section, with a `code()` test per crate
 - [x] Version and build metadata in `INFO` — `INFO` now reports `version`, `git` (short SHA via
   new `crates/server/build.rs`), `rustc`, and `profile`, in addition to `metrics`/`points`; the
   startup banner shows the same `git`/`profile` pair

@@ -27,6 +27,19 @@ pub enum EngineError {
     InvalidRange,
 }
 
+impl EngineError {
+    /// A stable, machine-readable identifier for this error, suitable for wire responses and
+    /// client-side matching. Unlike the [`std::fmt::Display`] message, this string does not
+    /// change across releases.
+    #[must_use]
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::Wal(error) => error.code(),
+            Self::InvalidRange => "INVALID_RANGE",
+        }
+    }
+}
+
 impl Engine {
     /// Opens an engine and rebuilds its in-memory index from the WAL.
     ///
@@ -115,10 +128,20 @@ impl Engine {
 
 #[cfg(test)]
 mod tests {
+    use nova_storage::WalError;
     use nova_types::{MetricName, Point};
     use tempfile::tempdir;
 
-    use super::Engine;
+    use super::{Engine, EngineError};
+
+    #[test]
+    fn error_codes_are_stable() {
+        assert_eq!(EngineError::InvalidRange.code(), "INVALID_RANGE");
+        assert_eq!(
+            EngineError::from(WalError::InvalidMetric).code(),
+            "INVALID_METRIC"
+        );
+    }
 
     #[test]
     fn survives_restart_and_reads_ranges() {
