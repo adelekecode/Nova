@@ -1,3 +1,4 @@
+use std::fmt::Write as _;
 use std::io::{self, IsTerminal, Write};
 
 use anyhow::Context;
@@ -68,12 +69,11 @@ async fn run_repl(stream: TcpStream, address: &str, color: bool) -> anyhow::Resu
         writer.write_all(input.as_bytes()).await?;
         writer.write_all(b"\n").await?;
 
-        match lines.next_line().await? {
-            Some(response) => println!("{}", format_response(&response, color)),
-            None => {
-                println!("connection closed by server");
-                return Ok(());
-            }
+        if let Some(response) = lines.next_line().await? {
+            println!("{}", format_response(&response, color));
+        } else {
+            println!("connection closed by server");
+            return Ok(());
         }
     }
 }
@@ -134,7 +134,7 @@ fn format_points(rest: &str, color: bool) -> String {
 
     let mut output = format!("{:<14}{}\n", "timestamp", "value");
     for (timestamp, value) in &rows {
-        output.push_str(&format!("{timestamp:<14}{value}\n"));
+        let _ = writeln!(output, "{timestamp:<14}{value}");
     }
     output.push_str(&colorize(color, "90", &format!("({count} points)")));
     output
@@ -147,7 +147,7 @@ fn format_info(rest: &str, color: bool) -> String {
             output.push('\n');
         }
         if let Some((key, value)) = field.split_once('=') {
-            output.push_str(&format!("{key:<10}{value}"));
+            let _ = write!(output, "{key:<10}{value}");
         } else {
             output.push_str(field);
         }
