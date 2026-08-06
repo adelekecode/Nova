@@ -176,13 +176,18 @@ startup banner.
 | Command | Meaning |
 | --- | --- |
 | `PING` | Check server health |
-| `WRITE <metric> <timestamp-ms> <value>` | Durably append one point |
+| `WRITE <metric> <timestamp-ms> <value>` | Durably write one point |
 | `RANGE <metric> <start-ms> <end-ms>` | Read an inclusive time range |
-| `INFO` | Show metric and point counts |
+| `INFO` | Show version, build, and metric/point counts |
 
 Commands and responses are newline-delimited. This intentionally small protocol gives the engine
 a testable interface while its semantics mature. RESP3 and ecosystem-compatible ingestion
 interfaces will be evaluated in later milestones.
+
+`WRITE` is an upsert keyed on `(metric, timestamp)`: writing an existing timestamp again replaces
+the previously visible value. Points may be written in any timestamp order — Nova does not require
+monotonically increasing timestamps per metric — and `RANGE` always returns results in ascending
+timestamp order regardless of the order they were written or replayed from the WAL in.
 
 ## Workspace
 

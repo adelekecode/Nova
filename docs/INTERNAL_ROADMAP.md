@@ -20,7 +20,10 @@ granular, fast-moving implementation tasks that don't belong in the public-facin
 - [ ] Clean shutdown with a final durability barrier
 - [ ] Torn/truncated WAL-tail detection and safe repair
 - [ ] Maximum frame, metric, request, and connection limits
-- [ ] Duplicate timestamp and out-of-order write semantics
+- [x] Duplicate timestamp and out-of-order write semantics — defined as an upsert keyed on
+  `(metric, timestamp)` with no ordering requirement; documented on `Engine::write`/`range` and
+  in the README protocol section, and locked in with three new engine tests covering duplicate
+  overwrite, out-of-order insertion, and both surviving a WAL-replay restart
 - [ ] Batch write command with atomicity rules
 - [ ] Config file plus environment and command-line precedence
 - [ ] Structured error codes rather than human-text-only errors
