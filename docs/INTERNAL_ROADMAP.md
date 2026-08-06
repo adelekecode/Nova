@@ -24,7 +24,9 @@ granular, fast-moving implementation tasks that don't belong in the public-facin
 - [ ] Batch write command with atomicity rules
 - [ ] Config file plus environment and command-line precedence
 - [ ] Structured error codes rather than human-text-only errors
-- [ ] Version and build metadata in `INFO`
+- [x] Version and build metadata in `INFO` — `INFO` now reports `version`, `git` (short SHA via
+  new `crates/server/build.rs`), `rustc`, and `profile`, in addition to `metrics`/`points`; the
+  startup banner shows the same `git`/`profile` pair
 - [ ] Graceful resource exhaustion behavior
 
 ## Notes

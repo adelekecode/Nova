@@ -18,6 +18,16 @@ use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// Short git commit hash captured by `build.rs`, or `"unknown"` outside a git checkout.
+const GIT_SHA: &str = env!("NOVA_BUILD_GIT_SHA");
+/// `rustc` version used to compile this binary, captured by `build.rs`.
+const RUSTC_VERSION: &str = env!("NOVA_BUILD_RUSTC_VERSION");
+/// `"debug"` or `"release"`, based on the active Cargo profile.
+const PROFILE: &str = if cfg!(debug_assertions) {
+    "debug"
+} else {
+    "release"
+};
 
 #[derive(Debug, Parser)]
 #[command(name = "nova-server", version, about = "Nova time-series database")]
@@ -48,7 +58,7 @@ fn print_banner(listen: &str, data_dir: &Path) {
         }
     };
 
-    let art_lines: [&str; 8] = [
+    let art_lines: [&str; 9] = [
         "",
         "",
         r"        \   |   /",
@@ -56,6 +66,7 @@ fn print_banner(listen: &str, data_dir: &Path) {
         r"  ---------(*)---------",
         r"          / | \",
         r"        /   |   \",
+        "",
         "",
     ];
     let info_lines = [
@@ -65,6 +76,7 @@ fn print_banner(listen: &str, data_dir: &Path) {
         format!("Port       {listen}"),
         format!("PID        {}", std::process::id()),
         format!("Data dir   {}", data_dir.display()),
+        format!("Build      {GIT_SHA} ({PROFILE})"),
         "Mode       standalone".to_owned(),
         String::new(),
     ];
@@ -171,7 +183,7 @@ async fn execute(input: &str, engine: &Mutex<Engine>) -> String {
         Command::Info => {
             let engine = engine.lock().await;
             format!(
-                "INFO metrics={} points={}",
+                "INFO version={VERSION} git={GIT_SHA} rustc={RUSTC_VERSION} profile={PROFILE} metrics={} points={}",
                 engine.metric_count(),
                 engine.point_count()
             )
