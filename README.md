@@ -184,6 +184,10 @@ Commands and responses are newline-delimited. This intentionally small protocol 
 a testable interface while its semantics mature. RESP3 and ecosystem-compatible ingestion
 interfaces will be evaluated in later milestones.
 
+Current safety limits are deliberately conservative: metric names are capped at 255 bytes, WAL
+frame payloads are capped at 1,024 bytes, request lines are capped at 8,192 bytes, and the server
+allows up to 1,024 active TCP connections.
+
 `WRITE` is an upsert keyed on `(metric, timestamp)`: writing an existing timestamp again replaces
 the previously visible value. Points may be written in any timestamp order — Nova does not require
 monotonically increasing timestamps per metric — and `RANGE` always returns results in ascending
@@ -199,6 +203,8 @@ identifier that a client can match on without parsing the human-readable message
 | `INVALID_METRIC` | The metric name is empty, too long, or contains unsupported characters |
 | `INVALID_NUMBER` | A timestamp or value argument couldn't be parsed |
 | `INVALID_RANGE` | A `RANGE` request had `start` greater than `end` |
+| `REQUEST_TOO_LARGE` | A request line exceeded the configured byte limit |
+| `TOO_MANY_CONNECTIONS` | The server's active connection limit was reached |
 | `CORRUPT` | The WAL contained a corrupt frame |
 | `IO` | A durable-storage I/O operation failed |
 

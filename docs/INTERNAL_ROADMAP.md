@@ -24,7 +24,8 @@ granular, fast-moving implementation tasks that don't belong in the public-facin
 - [x] Torn/truncated WAL-tail detection and safe repair — `Wal::replay` now truncates incomplete
   final headers or payloads back to the last valid frame while preserving hard failures for
   complete corrupt frames
-- [ ] Maximum frame, metric, request, and connection limits
+- [x] Maximum frame, metric, request, and connection limits — metric and WAL payload limits are
+  named constants; server runtime limits now cap request-line bytes and active TCP connections
 - [x] Duplicate timestamp and out-of-order write semantics — defined as an upsert keyed on
   `(metric, timestamp)` with no ordering requirement; documented on `Engine::write`/`range` and
   in the README protocol section, and locked in with three new engine tests covering duplicate

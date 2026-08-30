@@ -10,7 +10,8 @@ use thiserror::Error;
 
 const MAGIC: [u8; 4] = *b"NVW1";
 const HEADER_BYTES: usize = 12;
-const MAX_PAYLOAD_BYTES: u32 = 1024;
+/// Maximum WAL frame payload length, in bytes.
+pub const MAX_PAYLOAD_BYTES: u32 = 1024;
 
 /// An append-only write-ahead log.
 pub struct Wal {
@@ -224,14 +225,14 @@ fn decode_payload(payload: &[u8]) -> Result<WalRecord, WalError> {
 #[cfg(test)]
 mod tests {
     use std::{
-        fs::{self, OpenOptions},
+        fs::{self, File, OpenOptions},
         io::{Seek, SeekFrom, Write},
     };
 
     use nova_types::{MetricName, Point};
     use tempfile::tempdir;
 
-    use super::{HEADER_BYTES, MAGIC, Wal, WalError};
+    use super::{HEADER_BYTES, MAGIC, MAX_PAYLOAD_BYTES, Wal, WalError};
 
     #[test]
     fn error_codes_are_stable() {
@@ -346,5 +347,21 @@ mod tests {
         let error = Wal::replay(&path).unwrap_err();
         assert!(matches!(error, WalError::Corrupt("checksum mismatch")));
         assert_eq!(fs::metadata(&path).unwrap().len(), valid_len);
+    }
+
+    #[test]
+    fn rejects_frames_over_the_payload_limit() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("nova.wal");
+        let mut file = File::create(&path).unwrap();
+        file.write_all(&MAGIC).unwrap();
+        file.write_all(&(MAX_PAYLOAD_BYTES + 1).to_le_bytes())
+            .unwrap();
+        file.write_all(&0_u32.to_le_bytes()).unwrap();
+        file.sync_data().unwrap();
+        drop(file);
+
+        let error = Wal::replay(&path).unwrap_err();
+        assert!(matches!(error, WalError::Corrupt("payload exceeds limit")));
     }
 }

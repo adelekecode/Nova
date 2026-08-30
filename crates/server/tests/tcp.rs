@@ -1,7 +1,7 @@
 use std::{net::SocketAddr, sync::Arc};
 
 use nova_engine::Engine;
-use nova_server::serve_until_shutdown;
+use nova_server::{ServerLimits, serve_with_limits_until_shutdown};
 use tempfile::tempdir;
 use tokio::{
     io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
@@ -10,6 +10,12 @@ use tokio::{
 };
 
 async fn start_server() -> (SocketAddr, oneshot::Sender<()>, tokio::task::JoinHandle<()>) {
+    start_server_with_limits(ServerLimits::default()).await
+}
+
+async fn start_server_with_limits(
+    limits: ServerLimits,
+) -> (SocketAddr, oneshot::Sender<()>, tokio::task::JoinHandle<()>) {
     let directory = tempdir().expect("temporary data directory");
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind server");
     let address = listener.local_addr().expect("local address");
@@ -19,7 +25,7 @@ async fn start_server() -> (SocketAddr, oneshot::Sender<()>, tokio::task::JoinHa
     let (shutdown_sender, shutdown_receiver) = oneshot::channel();
 
     let server = tokio::spawn(async move {
-        let result = serve_until_shutdown(listener, engine, async {
+        let result = serve_with_limits_until_shutdown(listener, engine, limits, async {
             let _ = shutdown_receiver.await;
             Ok(())
         })
@@ -124,5 +130,62 @@ async fn shutdown_closes_idle_connections() {
 
     let mut buffer = [0_u8; 1];
     assert_eq!(reader.read(&mut buffer).await.expect("read eof"), 0);
+    server.await.expect("server task");
+}
+
+#[tokio::test]
+async fn rejects_oversized_requests() {
+    let limits = ServerLimits {
+        max_connections: 1024,
+        max_request_bytes: 8,
+    };
+    let (address, shutdown, server) = start_server_with_limits(limits).await;
+
+    assert_eq!(
+        send(address, "PING plus-extra").await,
+        "ERR REQUEST_TOO_LARGE request exceeds maximum of 8 bytes"
+    );
+
+    shutdown.send(()).expect("send shutdown");
+    server.await.expect("server task");
+}
+
+#[tokio::test]
+async fn rejects_connections_over_the_limit() {
+    let limits = ServerLimits {
+        max_connections: 1,
+        max_request_bytes: 1024,
+    };
+    let (address, shutdown, server) = start_server_with_limits(limits).await;
+    let first = TcpStream::connect(address)
+        .await
+        .expect("connect first client");
+    let (reader, mut writer) = first.into_split();
+    let mut lines = BufReader::new(reader).lines();
+
+    writer.write_all(b"PING\n").await.expect("write ping");
+    assert_eq!(
+        lines
+            .next_line()
+            .await
+            .expect("read first response")
+            .expect("first response"),
+        "PONG"
+    );
+
+    let second = TcpStream::connect(address)
+        .await
+        .expect("connect second client");
+    let mut second_lines = BufReader::new(second).lines();
+    assert_eq!(
+        second_lines
+            .next_line()
+            .await
+            .expect("read rejection")
+            .expect("rejection response"),
+        "ERR TOO_MANY_CONNECTIONS maximum connection limit reached"
+    );
+
+    shutdown.send(()).expect("send shutdown");
     server.await.expect("server task");
 }

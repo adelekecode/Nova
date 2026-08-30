@@ -2,6 +2,9 @@
 
 use std::fmt;
 
+/// Maximum accepted metric-name length, in bytes.
+pub const MAX_METRIC_NAME_BYTES: usize = 255;
+
 /// A single time-series sample.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Point {
@@ -33,7 +36,7 @@ impl MetricName {
     pub fn new(value: impl Into<String>) -> Result<Self, InvalidMetricName> {
         let value = value.into();
         if value.is_empty()
-            || value.len() > 255
+            || value.len() > MAX_METRIC_NAME_BYTES
             || !value
                 .bytes()
                 .all(|byte| byte.is_ascii_alphanumeric() || b"_-.:".contains(&byte))
@@ -72,12 +75,18 @@ impl std::error::Error for InvalidMetricName {}
 
 #[cfg(test)]
 mod tests {
-    use super::MetricName;
+    use super::{MAX_METRIC_NAME_BYTES, MetricName};
 
     #[test]
     fn validates_metric_names() {
         assert!(MetricName::new("system.cpu:usage").is_ok());
         assert!(MetricName::new("").is_err());
         assert!(MetricName::new("spaces are invalid").is_err());
+    }
+
+    #[test]
+    fn enforces_metric_name_length_limit() {
+        assert!(MetricName::new("a".repeat(MAX_METRIC_NAME_BYTES)).is_ok());
+        assert!(MetricName::new("a".repeat(MAX_METRIC_NAME_BYTES + 1)).is_err());
     }
 }

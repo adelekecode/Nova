@@ -1,13 +1,18 @@
 //! TCP server runtime for Nova.
 
-use std::{future::Future, io::IsTerminal, path::Path, sync::Arc};
+use std::{
+    future::Future,
+    io::{self, ErrorKind, IsTerminal},
+    path::Path,
+    sync::Arc,
+};
 
 use anyhow::Context;
 use nova_engine::Engine;
 use nova_protocol::{Command, parse};
 use nova_types::Point;
 use tokio::{
-    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+    io::{AsyncBufRead, AsyncBufReadExt, AsyncWriteExt, BufReader},
     net::{TcpListener, TcpStream},
     sync::{Mutex, watch},
     task::JoinSet,
@@ -28,6 +33,29 @@ const PROFILE: &str = if cfg!(debug_assertions) {
 
 /// Shared engine handle used by the server's connection tasks.
 pub type SharedEngine = Arc<Mutex<Engine>>;
+
+/// Maximum accepted request line length, in bytes.
+pub const MAX_REQUEST_BYTES: usize = 8 * 1024;
+/// Maximum number of concurrently active TCP connections.
+pub const MAX_CONNECTIONS: usize = 1024;
+
+/// Runtime limits for the TCP server.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ServerLimits {
+    /// Maximum number of concurrently active TCP connections.
+    pub max_connections: usize,
+    /// Maximum accepted request line length, in bytes.
+    pub max_request_bytes: usize,
+}
+
+impl Default for ServerLimits {
+    fn default() -> Self {
+        Self {
+            max_connections: MAX_CONNECTIONS,
+            max_request_bytes: MAX_REQUEST_BYTES,
+        }
+    }
+}
 
 /// Prints a Redis-style startup banner to the terminal.
 ///
@@ -92,6 +120,21 @@ pub async fn serve_until_shutdown(
     engine: SharedEngine,
     shutdown: impl Future<Output = anyhow::Result<()>>,
 ) -> anyhow::Result<()> {
+    serve_with_limits_until_shutdown(listener, engine, ServerLimits::default(), shutdown).await
+}
+
+/// Accepts TCP connections with explicit runtime limits until the supplied shutdown future
+/// resolves.
+///
+/// # Errors
+///
+/// Returns an error if accepting a connection fails or the shutdown future reports an error.
+pub async fn serve_with_limits_until_shutdown(
+    listener: TcpListener,
+    engine: SharedEngine,
+    limits: ServerLimits,
+    shutdown: impl Future<Output = anyhow::Result<()>>,
+) -> anyhow::Result<()> {
     let shutdown = shutdown;
     tokio::pin!(shutdown);
     let (shutdown_sender, shutdown_receiver) = watch::channel(false);
@@ -100,11 +143,21 @@ pub async fn serve_until_shutdown(
     loop {
         tokio::select! {
             accepted = listener.accept() => {
-                let (stream, peer) = accepted.context("failed to accept connection")?;
+                let (mut stream, peer) = accepted.context("failed to accept connection")?;
+                if connections.len() >= limits.max_connections {
+                    if let Err(error) = reject_connection(&mut stream).await {
+                        warn!(%peer, %error, "failed to reject connection");
+                    }
+                    continue;
+                }
                 let engine = Arc::clone(&engine);
                 let shutdown_receiver = shutdown_receiver.clone();
+                let max_request_bytes = limits.max_request_bytes;
                 connections.spawn(async move {
-                    (peer, handle_connection(stream, engine, shutdown_receiver).await)
+                    (
+                        peer,
+                        handle_connection(stream, engine, shutdown_receiver, max_request_bytes).await,
+                    )
                 });
             }
             Some(connection) = connections.join_next(), if !connections.is_empty() => {
@@ -132,6 +185,14 @@ pub async fn serve_until_shutdown(
     Ok(())
 }
 
+async fn reject_connection(stream: &mut TcpStream) -> anyhow::Result<()> {
+    stream
+        .write_all(b"ERR TOO_MANY_CONNECTIONS maximum connection limit reached\n")
+        .await?;
+    stream.shutdown().await?;
+    Ok(())
+}
+
 fn log_connection_result(
     connection: Result<(std::net::SocketAddr, anyhow::Result<()>), tokio::task::JoinError>,
 ) {
@@ -146,19 +207,34 @@ async fn handle_connection(
     stream: TcpStream,
     engine: SharedEngine,
     mut shutdown: watch::Receiver<bool>,
+    max_request_bytes: usize,
 ) -> anyhow::Result<()> {
     let (reader, mut writer) = stream.into_split();
-    let mut lines = BufReader::new(reader).lines();
+    let mut reader = BufReader::new(reader);
 
     loop {
         tokio::select! {
-            line = lines.next_line() => {
-                let Some(line) = line? else {
-                    return Ok(());
-                };
-                let response = execute(&line, &engine).await;
-                writer.write_all(response.as_bytes()).await?;
-                writer.write_all(b"\n").await?;
+            line = read_line_limited(&mut reader, max_request_bytes) => {
+                match line? {
+                    ReadLine::Line(line) => {
+                        let response = execute(&line, &engine).await;
+                        writer.write_all(response.as_bytes()).await?;
+                        writer.write_all(b"\n").await?;
+                    }
+                    ReadLine::TooLarge => {
+                        writer
+                            .write_all(
+                                format!(
+                                    "ERR REQUEST_TOO_LARGE request exceeds maximum of {max_request_bytes} bytes\n"
+                                )
+                                .as_bytes(),
+                            )
+                            .await?;
+                        writer.shutdown().await?;
+                        return Ok(());
+                    }
+                    ReadLine::Eof => return Ok(()),
+                }
             }
             changed = shutdown.changed() => {
                 if changed.is_err() || *shutdown.borrow() {
@@ -168,6 +244,58 @@ async fn handle_connection(
             }
         }
     }
+}
+
+enum ReadLine {
+    Line(String),
+    Eof,
+    TooLarge,
+}
+
+async fn read_line_limited(
+    reader: &mut (impl AsyncBufRead + Unpin),
+    max_bytes: usize,
+) -> io::Result<ReadLine> {
+    let mut line = Vec::new();
+
+    loop {
+        let available = reader.fill_buf().await?;
+        if available.is_empty() {
+            if line.is_empty() {
+                return Ok(ReadLine::Eof);
+            }
+            return decode_line(line);
+        }
+
+        let take = available
+            .iter()
+            .position(|&byte| byte == b'\n')
+            .map_or(available.len(), |position| position + 1);
+
+        if line.len() + take > max_bytes {
+            return Ok(ReadLine::TooLarge);
+        }
+
+        let ends_line = available[..take].ends_with(b"\n");
+        line.extend_from_slice(&available[..take]);
+        reader.consume(take);
+
+        if ends_line {
+            if line.ends_with(b"\n") {
+                line.pop();
+            }
+            if line.ends_with(b"\r") {
+                line.pop();
+            }
+            return decode_line(line);
+        }
+    }
+}
+
+fn decode_line(line: Vec<u8>) -> io::Result<ReadLine> {
+    String::from_utf8(line)
+        .map(ReadLine::Line)
+        .map_err(|error| io::Error::new(ErrorKind::InvalidData, error))
 }
 
 /// Formats a wire error response as `ERR <CODE> <message>`, where `code` is a stable,
