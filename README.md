@@ -151,7 +151,7 @@ is focused on API shape and operational behavior before the project moves into s
 | Duplicate timestamp and out-of-order write semantics | Complete |
 | Batch write command with atomicity rules | Complete |
 | Config file and precedence rules | Complete |
-| Graceful resource exhaustion behavior | Planned |
+| Graceful resource exhaustion behavior | Complete |
 
 See the complete [development roadmap](ROADMAP.md), [architecture](ARCHITECTURE.md), and
 [project vision](docs/VISION.md).
@@ -210,6 +210,12 @@ The CLI also supports `NOVA_ADDRESS`, `NOVA_HOST`, `NOVA_PORT`, `NOVA_CLI_HISTOR
 printf 'PING\nINFO\n' | cargo run -p nova-cli -- --raw
 ```
 
+For connection diagnostics, run:
+
+```bash
+cargo run -p nova-cli -- DOCTOR
+```
+
 Nova listens on `127.0.0.1:7422` and stores data under `./nova-data` by default. Use `--listen`
 and `--data-dir` to change those server values. Pass `--no-banner` to `nova-server` to suppress
 the startup banner.
@@ -222,12 +228,13 @@ data_dir = "./nova-data"
 no_banner = false
 max_connections = 1024
 max_request_bytes = 8192
+client_idle_timeout_ms = 60000
 ```
 
 Pass it with `--config path/to/nova.toml` or `NOVA_CONFIG`. Configuration precedence is explicit:
 defaults, then config file, then environment variables, then command-line flags. Supported
 environment overrides are `NOVA_LISTEN`, `NOVA_DATA_DIR`, `NOVA_NO_BANNER`,
-`NOVA_MAX_CONNECTIONS`, and `NOVA_MAX_REQUEST_BYTES`.
+`NOVA_MAX_CONNECTIONS`, `NOVA_MAX_REQUEST_BYTES`, and `NOVA_CLIENT_IDLE_TIMEOUT_MS`.
 
 ## Current protocol
 
@@ -244,8 +251,9 @@ a testable interface while its semantics mature. RESP3 and ecosystem-compatible 
 interfaces will be evaluated in later milestones.
 
 Current safety limits are deliberately conservative: metric names are capped at 255 bytes, WAL
-frame payloads are capped at 1,024 bytes, request lines are capped at 8,192 bytes, and the server
-allows up to 1,024 active TCP connections.
+frame payloads are capped at 1,024 bytes, request lines are capped at 8,192 bytes, the server
+allows up to 1,024 active TCP connections, and idle clients are closed after 60 seconds without a
+complete request line.
 
 `WRITE` is an upsert keyed on `(metric, timestamp)`: writing an existing timestamp again replaces
 the previously visible value. Points may be written in any timestamp order — Nova does not require
@@ -268,6 +276,7 @@ identifier that a client can match on without parsing the human-readable message
 | `INVALID_RANGE` | A `RANGE` request had `start` greater than `end` |
 | `REQUEST_TOO_LARGE` | A request line exceeded the configured byte limit |
 | `TOO_MANY_CONNECTIONS` | The server's active connection limit was reached |
+| `IDLE_TIMEOUT` | A client stayed connected without completing a request line before the idle timeout |
 | `CORRUPT` | The WAL contained a corrupt frame |
 | `IO` | A durable-storage I/O operation failed |
 

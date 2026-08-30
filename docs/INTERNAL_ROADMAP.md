@@ -44,7 +44,9 @@ granular, fast-moving implementation tasks that don't belong in the public-facin
 - [x] Version and build metadata in `INFO` — `INFO` now reports `version`, `git` (short SHA via
   new `crates/server/build.rs`), `rustc`, and `profile`, in addition to `metrics`/`points`; the
   startup banner shows the same `git`/`profile` pair
-- [ ] Graceful resource exhaustion behavior
+- [x] Graceful resource exhaustion behavior — server limits reject excess connections, reject
+  oversized requests, close idle/slow clients with `ERR IDLE_TIMEOUT`, and drain completed
+  handlers before deciding whether a new connection exceeds the active limit
 
 ## Notes
 

@@ -273,8 +273,7 @@ fn run_local_command(command: LocalCommand, output: OutputMode) -> anyhow::Resul
             print!("\x1b[2J\x1b[H");
             io::stdout().flush()?;
         }
-        LocalCommand::Quit => {}
-        LocalCommand::Doctor => {}
+        LocalCommand::Quit | LocalCommand::Doctor => {}
     }
     Ok(())
 }
@@ -331,14 +330,14 @@ async fn run_doctor_on_connection(
     match connection.send("INFO").await {
         Ok(response) if response.starts_with("INFO ") => {
             print_doctor_line(output, true, "INFO", "server metadata available");
-            if !output.raw {
+            if output.raw {
+                println!("{response}");
+            } else {
                 println!();
                 println!("Server info:");
                 for line in format_response(&response, output).lines() {
                     println!("  {line}");
                 }
-            } else {
-                println!("{response}");
             }
         }
         Ok(response) => {
