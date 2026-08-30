@@ -74,15 +74,15 @@ not a claim Nova makes today.
 
 ### Required to complete the slice
 
-- [ ] End-to-end tests that launch the server and exercise real client connections
+- [x] End-to-end tests that launch the server and exercise real client connections
 - [ ] Clean shutdown with a final durability barrier
 - [ ] Torn/truncated WAL-tail detection and safe repair
 - [ ] Maximum frame, metric, request, and connection limits
-- [ ] Duplicate timestamp and out-of-order write semantics
+- [x] Duplicate timestamp and out-of-order write semantics
 - [ ] Batch write command with atomicity rules
 - [ ] Config file plus environment and command-line precedence
-- [ ] Structured error codes rather than human-text-only errors
-- [ ] Version and build metadata in `INFO`
+- [x] Structured error codes rather than human-text-only errors
+- [x] Version and build metadata in `INFO`
 - [ ] Graceful resource exhaustion behavior
 
 **Exit criteria**
@@ -358,4 +358,3 @@ Development can expand according to user demand:
 
 The open-source engine remains the foundation. Commercial offerings, if created, should fund the
 project without making the core database deliberately incomplete.
-

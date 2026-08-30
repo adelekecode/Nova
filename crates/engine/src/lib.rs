@@ -194,19 +194,17 @@ mod tests {
         let metric = MetricName::new("temperature").unwrap();
         let mut engine = Engine::open(directory.path()).unwrap();
 
-        engine
-            .write(metric.clone(), &Point::new(300, 3.0))
-            .unwrap();
-        engine
-            .write(metric.clone(), &Point::new(100, 1.0))
-            .unwrap();
-        engine
-            .write(metric.clone(), &Point::new(200, 2.0))
-            .unwrap();
+        engine.write(metric.clone(), &Point::new(300, 3.0)).unwrap();
+        engine.write(metric.clone(), &Point::new(100, 1.0)).unwrap();
+        engine.write(metric.clone(), &Point::new(200, 2.0)).unwrap();
 
         assert_eq!(
             engine.range(&metric, 0, 400).unwrap(),
-            vec![Point::new(100, 1.0), Point::new(200, 2.0), Point::new(300, 3.0)]
+            vec![
+                Point::new(100, 1.0),
+                Point::new(200, 2.0),
+                Point::new(300, 3.0)
+            ]
         );
     }
 
@@ -216,24 +214,22 @@ mod tests {
         let metric = MetricName::new("temperature").unwrap();
         {
             let mut engine = Engine::open(directory.path()).unwrap();
-            engine
-                .write(metric.clone(), &Point::new(300, 3.0))
-                .unwrap();
-            engine
-                .write(metric.clone(), &Point::new(100, 1.0))
-                .unwrap();
+            engine.write(metric.clone(), &Point::new(300, 3.0)).unwrap();
+            engine.write(metric.clone(), &Point::new(100, 1.0)).unwrap();
             engine
                 .write(metric.clone(), &Point::new(100, 99.0))
                 .unwrap();
-            engine
-                .write(metric.clone(), &Point::new(200, 2.0))
-                .unwrap();
+            engine.write(metric.clone(), &Point::new(200, 2.0)).unwrap();
         }
 
         let engine = Engine::open(directory.path()).unwrap();
         assert_eq!(
             engine.range(&metric, 0, 400).unwrap(),
-            vec![Point::new(100, 99.0), Point::new(200, 2.0), Point::new(300, 3.0)]
+            vec![
+                Point::new(100, 99.0),
+                Point::new(200, 2.0),
+                Point::new(300, 3.0)
+            ]
         );
         assert_eq!(engine.point_count(), 3);
     }

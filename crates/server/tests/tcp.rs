@@ -1,0 +1,108 @@
+use std::{net::SocketAddr, sync::Arc};
+
+use nova_engine::Engine;
+use nova_server::serve_until_shutdown;
+use tempfile::tempdir;
+use tokio::{
+    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+    net::{TcpListener, TcpStream},
+    sync::{Mutex, oneshot},
+};
+
+async fn start_server() -> (SocketAddr, oneshot::Sender<()>, tokio::task::JoinHandle<()>) {
+    let directory = tempdir().expect("temporary data directory");
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind server");
+    let address = listener.local_addr().expect("local address");
+    let engine = Arc::new(Mutex::new(
+        Engine::open(directory.path()).expect("open engine"),
+    ));
+    let (shutdown_sender, shutdown_receiver) = oneshot::channel();
+
+    let server = tokio::spawn(async move {
+        let result = serve_until_shutdown(listener, engine, async {
+            let _ = shutdown_receiver.await;
+            Ok(())
+        })
+        .await;
+        assert!(result.is_ok(), "server failed: {result:?}");
+        drop(directory);
+    });
+
+    (address, shutdown_sender, server)
+}
+
+async fn send(address: SocketAddr, command: &str) -> String {
+    let responses = send_all(address, &[command]).await;
+    responses.into_iter().next().expect("one response")
+}
+
+async fn send_all(address: SocketAddr, commands: &[&str]) -> Vec<String> {
+    let stream = TcpStream::connect(address)
+        .await
+        .expect("connect to server");
+    let (reader, mut writer) = stream.into_split();
+    let mut lines = BufReader::new(reader).lines();
+    let mut responses = Vec::with_capacity(commands.len());
+
+    for command in commands {
+        writer
+            .write_all(format!("{command}\n").as_bytes())
+            .await
+            .expect("write command");
+        responses.push(
+            lines
+                .next_line()
+                .await
+                .expect("read response")
+                .expect("server response"),
+        );
+    }
+
+    responses
+}
+
+#[tokio::test]
+async fn serves_real_tcp_commands() {
+    let (address, shutdown, server) = start_server().await;
+
+    let responses = send_all(
+        address,
+        &[
+            "PING",
+            "WRITE cpu.usage 100 1.5",
+            "WRITE cpu.usage 200 2.5",
+            "RANGE cpu.usage 0 200",
+        ],
+    )
+    .await;
+    assert_eq!(responses, ["PONG", "OK", "OK", "POINTS 2 100 1.5;200 2.5"]);
+
+    let info = send(address, "INFO").await;
+    assert!(info.starts_with("INFO version="), "{info}");
+    assert!(info.contains(" metrics=1 "), "{info}");
+    assert!(info.ends_with(" points=2"), "{info}");
+
+    shutdown.send(()).expect("send shutdown");
+    server.await.expect("server task");
+}
+
+#[tokio::test]
+async fn reports_structured_errors_over_tcp() {
+    let (address, shutdown, server) = start_server().await;
+
+    assert_eq!(
+        send(address, "RANGE cpu.usage 200 100").await,
+        "ERR INVALID_RANGE range start must be less than or equal to range end"
+    );
+    assert_eq!(
+        send(address, "WRITE bad/name 100 1.5").await,
+        "ERR INVALID_METRIC invalid metric name"
+    );
+    assert_eq!(
+        send(address, "NOPE").await,
+        "ERR UNKNOWN_COMMAND unknown command"
+    );
+
+    shutdown.send(()).expect("send shutdown");
+    server.await.expect("server task");
+}

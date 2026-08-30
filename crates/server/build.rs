@@ -7,7 +7,10 @@ use std::process::Command;
 
 fn main() {
     println!("cargo:rustc-env=NOVA_BUILD_GIT_SHA={}", git_sha());
-    println!("cargo:rustc-env=NOVA_BUILD_RUSTC_VERSION={}", rustc_version());
+    println!(
+        "cargo:rustc-env=NOVA_BUILD_RUSTC_VERSION={}",
+        rustc_version()
+    );
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=../../.git/HEAD");
 }

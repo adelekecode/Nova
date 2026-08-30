@@ -273,6 +273,7 @@ dependencies = [
  "nova-engine",
  "nova-protocol",
  "nova-types",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",

@@ -16,7 +16,9 @@ granular, fast-moving implementation tasks that don't belong in the public-facin
 
 ### Still open from the original slice checklist (see `ROADMAP.md`)
 
-- [ ] End-to-end tests that launch the server and exercise real client connections
+- [x] End-to-end tests that launch the server and exercise real client connections — covered by
+  `nova-server` TCP integration tests that bind an ephemeral local listener, reuse a client
+  connection across `PING`/`WRITE`/`RANGE`, and verify structured error responses
 - [ ] Clean shutdown with a final durability barrier
 - [ ] Torn/truncated WAL-tail detection and safe repair
 - [ ] Maximum frame, metric, request, and connection limits
