@@ -31,8 +31,10 @@ nova-storage = { path = "crates/storage" }
 nova-types = { path = "crates/types" }
 nova-wal = { path = "crates/wal" }
 tempfile = "3.20"
+serde = { version = "1.0", features = ["derive"] }
 thiserror = "2.0"
 tokio = { version = "1.45", features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync"] }
+toml = "0.9"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 

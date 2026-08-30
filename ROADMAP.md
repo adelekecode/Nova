@@ -80,7 +80,7 @@ not a claim Nova makes today.
 - [x] Maximum frame, metric, request, and connection limits
 - [x] Duplicate timestamp and out-of-order write semantics
 - [x] Batch write command with atomicity rules
-- [ ] Config file plus environment and command-line precedence
+- [x] Config file plus environment and command-line precedence
 - [x] Structured error codes rather than human-text-only errors
 - [x] Version and build metadata in `INFO`
 - [ ] Graceful resource exhaustion behavior

@@ -32,7 +32,8 @@ granular, fast-moving implementation tasks that don't belong in the public-facin
   overwrite, out-of-order insertion, and both surviving a WAL-replay restart
 - [x] Batch write command with atomicity rules — `BATCH` validates all triples before execution,
   writes the full batch as one WAL frame, and applies it to memory only after the frame is durable
-- [ ] Config file plus environment and command-line precedence
+- [x] Config file plus environment and command-line precedence — `nova-server` accepts a TOML
+  config file, environment overrides, and CLI overrides with documented precedence
 - [x] Structured error codes rather than human-text-only errors — `ParseError`, `EngineError`,
   and `WalError` each expose a `code()` method returning a stable `SCREAMING_SNAKE_CASE`
   identifier (`UNKNOWN_COMMAND`, `WRONG_ARITY`, `INVALID_METRIC`, `INVALID_NUMBER`,

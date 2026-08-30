@@ -3,14 +3,15 @@
 use std::{
     future::Future,
     io::{self, ErrorKind, IsTerminal},
-    path::Path,
+    path::{Path, PathBuf},
     sync::Arc,
 };
 
-use anyhow::Context;
+use anyhow::{Context, anyhow};
 use nova_engine::Engine;
 use nova_protocol::{Command, parse};
 use nova_types::Point;
+use serde::Deserialize;
 use tokio::{
     io::{AsyncBufRead, AsyncBufReadExt, AsyncWriteExt, BufReader},
     net::{TcpListener, TcpStream},
@@ -48,12 +49,166 @@ pub struct ServerLimits {
     pub max_request_bytes: usize,
 }
 
+/// Complete runtime configuration for `nova-server`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ServerConfig {
+    /// Address on which Nova accepts TCP connections.
+    pub listen: String,
+    /// Directory containing durable Nova data.
+    pub data_dir: PathBuf,
+    /// Whether to suppress the startup banner.
+    pub no_banner: bool,
+    /// TCP runtime limits.
+    pub limits: ServerLimits,
+}
+
+impl Default for ServerConfig {
+    fn default() -> Self {
+        Self {
+            listen: "127.0.0.1:7422".to_owned(),
+            data_dir: PathBuf::from("./nova-data"),
+            no_banner: false,
+            limits: ServerLimits::default(),
+        }
+    }
+}
+
+/// Optional configuration overrides from CLI arguments or environment variables.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ServerConfigOverrides {
+    /// Override for [`ServerConfig::listen`].
+    pub listen: Option<String>,
+    /// Override for [`ServerConfig::data_dir`].
+    pub data_dir: Option<PathBuf>,
+    /// Override for [`ServerConfig::no_banner`].
+    pub no_banner: Option<bool>,
+    /// Override for [`ServerLimits::max_connections`].
+    pub max_connections: Option<usize>,
+    /// Override for [`ServerLimits::max_request_bytes`].
+    pub max_request_bytes: Option<usize>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ConfigFile {
+    listen: Option<String>,
+    data_dir: Option<PathBuf>,
+    no_banner: Option<bool>,
+    max_connections: Option<usize>,
+    max_request_bytes: Option<usize>,
+}
+
+impl From<ConfigFile> for ServerConfigOverrides {
+    fn from(value: ConfigFile) -> Self {
+        Self {
+            listen: value.listen,
+            data_dir: value.data_dir,
+            no_banner: value.no_banner,
+            max_connections: value.max_connections,
+            max_request_bytes: value.max_request_bytes,
+        }
+    }
+}
+
 impl Default for ServerLimits {
     fn default() -> Self {
         Self {
             max_connections: MAX_CONNECTIONS,
             max_request_bytes: MAX_REQUEST_BYTES,
         }
+    }
+}
+
+/// Loads server configuration using `defaults < config file < environment < CLI` precedence.
+///
+/// # Errors
+///
+/// Returns an error if the config file cannot be read or parsed, or if an environment override has
+/// an invalid value.
+pub fn load_server_config(
+    config_path: Option<&Path>,
+    cli: ServerConfigOverrides,
+) -> anyhow::Result<ServerConfig> {
+    let file = config_path
+        .map(read_config_file)
+        .transpose()?
+        .unwrap_or_default();
+    let env = server_config_overrides_from_env()?;
+    Ok(resolve_server_config(file.into(), env, cli))
+}
+
+fn read_config_file(path: &Path) -> anyhow::Result<ConfigFile> {
+    let contents = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read config file {}", path.display()))?;
+    toml::from_str(&contents)
+        .with_context(|| format!("failed to parse config file {}", path.display()))
+}
+
+fn server_config_overrides_from_env() -> anyhow::Result<ServerConfigOverrides> {
+    Ok(ServerConfigOverrides {
+        listen: std::env::var("NOVA_LISTEN").ok(),
+        data_dir: std::env::var_os("NOVA_DATA_DIR").map(PathBuf::from),
+        no_banner: parse_optional_bool_env("NOVA_NO_BANNER")?,
+        max_connections: parse_optional_usize_env("NOVA_MAX_CONNECTIONS")?,
+        max_request_bytes: parse_optional_usize_env("NOVA_MAX_REQUEST_BYTES")?,
+    })
+}
+
+fn parse_optional_usize_env(name: &str) -> anyhow::Result<Option<usize>> {
+    std::env::var(name)
+        .ok()
+        .map(|value| {
+            value
+                .parse()
+                .with_context(|| format!("{name} must be a non-negative integer"))
+        })
+        .transpose()
+}
+
+fn parse_optional_bool_env(name: &str) -> anyhow::Result<Option<bool>> {
+    std::env::var(name)
+        .ok()
+        .map(|value| parse_bool(name, &value))
+        .transpose()
+}
+
+fn parse_bool(name: &str, value: &str) -> anyhow::Result<bool> {
+    match value.to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Ok(true),
+        "0" | "false" | "no" | "off" => Ok(false),
+        _ => Err(anyhow!(
+            "{name} must be one of true, false, 1, 0, yes, no, on, or off"
+        )),
+    }
+}
+
+fn resolve_server_config(
+    file: ServerConfigOverrides,
+    env: ServerConfigOverrides,
+    cli: ServerConfigOverrides,
+) -> ServerConfig {
+    let mut config = ServerConfig::default();
+    apply_overrides(&mut config, file);
+    apply_overrides(&mut config, env);
+    apply_overrides(&mut config, cli);
+    config
+}
+
+fn apply_overrides(config: &mut ServerConfig, overrides: ServerConfigOverrides) {
+    if let Some(listen) = overrides.listen {
+        config.listen = listen;
+    }
+    if let Some(data_dir) = overrides.data_dir {
+        config.data_dir = data_dir;
+    }
+    if let Some(no_banner) = overrides.no_banner {
+        config.no_banner = no_banner;
+    }
+    if let Some(max_connections) = overrides.max_connections {
+        config.limits.max_connections = max_connections;
+    }
+    if let Some(max_request_bytes) = overrides.max_request_bytes {
+        config.limits.max_request_bytes = max_request_bytes;
     }
 }
 
@@ -355,5 +510,84 @@ async fn execute(input: &str, engine: &Mutex<Engine>) -> String {
                 engine.point_count()
             )
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::{
+        ServerConfig, ServerConfigOverrides, ServerLimits, read_config_file, resolve_server_config,
+    };
+
+    #[test]
+    fn resolves_config_with_documented_precedence() {
+        let config = resolve_server_config(
+            ServerConfigOverrides {
+                listen: Some("127.0.0.1:7000".to_owned()),
+                data_dir: Some(PathBuf::from("/config")),
+                no_banner: Some(true),
+                max_connections: Some(10),
+                max_request_bytes: Some(100),
+            },
+            ServerConfigOverrides {
+                listen: Some("127.0.0.1:8000".to_owned()),
+                data_dir: Some(PathBuf::from("/env")),
+                no_banner: Some(false),
+                max_connections: Some(20),
+                max_request_bytes: Some(200),
+            },
+            ServerConfigOverrides {
+                listen: Some("127.0.0.1:9000".to_owned()),
+                data_dir: None,
+                no_banner: Some(true),
+                max_connections: None,
+                max_request_bytes: Some(300),
+            },
+        );
+
+        assert_eq!(
+            config,
+            ServerConfig {
+                listen: "127.0.0.1:9000".to_owned(),
+                data_dir: PathBuf::from("/env"),
+                no_banner: true,
+                limits: ServerLimits {
+                    max_connections: 20,
+                    max_request_bytes: 300,
+                },
+            }
+        );
+    }
+
+    #[test]
+    fn reads_toml_config_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("nova.toml");
+        std::fs::write(
+            &path,
+            r#"
+listen = "127.0.0.1:7777"
+data_dir = "/tmp/nova-test"
+no_banner = true
+max_connections = 64
+max_request_bytes = 4096
+"#,
+        )
+        .unwrap();
+
+        let file = read_config_file(&path).unwrap();
+        let config = resolve_server_config(
+            file.into(),
+            ServerConfigOverrides::default(),
+            ServerConfigOverrides::default(),
+        );
+
+        assert_eq!(config.listen, "127.0.0.1:7777");
+        assert_eq!(config.data_dir, PathBuf::from("/tmp/nova-test"));
+        assert!(config.no_banner);
+        assert_eq!(config.limits.max_connections, 64);
+        assert_eq!(config.limits.max_request_bytes, 4096);
     }
 }

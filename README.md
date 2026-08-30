@@ -190,6 +190,21 @@ Nova listens on `127.0.0.1:7422` and stores data under `./nova-data` by default.
 and `--data-dir` to change those values. Pass `--no-banner` to `nova-server` to suppress the
 startup banner.
 
+`nova-server` can also read a TOML config file:
+
+```toml
+listen = "127.0.0.1:7422"
+data_dir = "./nova-data"
+no_banner = false
+max_connections = 1024
+max_request_bytes = 8192
+```
+
+Pass it with `--config path/to/nova.toml` or `NOVA_CONFIG`. Configuration precedence is explicit:
+defaults, then config file, then environment variables, then command-line flags. Supported
+environment overrides are `NOVA_LISTEN`, `NOVA_DATA_DIR`, `NOVA_NO_BANNER`,
+`NOVA_MAX_CONNECTIONS`, and `NOVA_MAX_REQUEST_BYTES`.
+
 ## Current protocol
 
 | Command | Meaning |
