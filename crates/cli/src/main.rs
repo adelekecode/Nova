@@ -78,6 +78,7 @@ enum LocalCommand {
     Help,
     Clear,
     Quit,
+    Doctor,
 }
 
 struct ClientConnection {
@@ -87,15 +88,9 @@ struct ClientConnection {
 
 impl ClientConnection {
     async fn connect(address: &str) -> anyhow::Result<Self> {
-        let stream = TcpStream::connect(address).await.with_context(|| {
-            format!(
-                "could not connect to Nova at {address}\n\n\
-                 Start the server in another terminal:\n  \
-                 cargo run -p nova-server\n\n\
-                 Or point the CLI at a running server:\n  \
-                 nova-cli --address <host:port>"
-            )
-        })?;
+        let stream = TcpStream::connect(address)
+            .await
+            .with_context(|| connection_hint(address))?;
         let (reader, writer) = stream.into_split();
         Ok(Self {
             reader: BufReader::new(reader),
@@ -114,6 +109,16 @@ impl ClientConnection {
     }
 }
 
+fn connection_hint(address: &str) -> String {
+    format!(
+        "could not connect to Nova at {address}\n\n\
+         Start the server in another terminal:\n  \
+         cargo run -p nova-server\n\n\
+         Or point the CLI at a running server:\n  \
+         nova-cli --address <host:port>"
+    )
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let arguments = Arguments::parse();
@@ -125,6 +130,13 @@ async fn main() -> anyhow::Result<()> {
     };
 
     if let Some(local) = parse_one_shot_local_command(&arguments.command) {
+        if local == LocalCommand::Doctor {
+            let healthy = run_doctor(&address, output).await?;
+            if !healthy {
+                std::process::exit(1);
+            }
+            return Ok(());
+        }
         run_local_command(local, output)?;
         return Ok(());
     }
@@ -140,7 +152,7 @@ async fn main() -> anyhow::Result<()> {
             )
             .await
         } else {
-            run_stdin_commands(&mut connection, output).await
+            run_stdin_commands(&mut connection, &address, output).await
         }
     } else {
         let command = arguments.command.join(" ");
@@ -179,7 +191,11 @@ async fn run_repl(
                         save_history(&mut editor, history_path.as_ref());
                         return Ok(());
                     }
-                    run_local_command(local, output)?;
+                    if local == LocalCommand::Doctor {
+                        run_doctor_on_connection(connection, address, output).await?;
+                    } else {
+                        run_local_command(local, output)?;
+                    }
                     continue;
                 }
 
@@ -201,6 +217,7 @@ async fn run_repl(
 
 async fn run_stdin_commands(
     connection: &mut ClientConnection,
+    address: &str,
     output: OutputMode,
 ) -> anyhow::Result<()> {
     let mut input = String::new();
@@ -211,7 +228,11 @@ async fn run_stdin_commands(
                 if local == LocalCommand::Quit {
                     return Ok(());
                 }
-                run_local_command(local, output)?;
+                if local == LocalCommand::Doctor {
+                    run_doctor_on_connection(connection, address, output).await?;
+                } else {
+                    run_local_command(local, output)?;
+                }
             } else {
                 let response = connection.send(command).await?;
                 print_response(&response, output);
@@ -235,6 +256,7 @@ fn parse_local_command(input: &str) -> Option<LocalCommand> {
         "help" | "?" | ".help" => Some(LocalCommand::Help),
         "clear" | ".clear" => Some(LocalCommand::Clear),
         "quit" | "exit" | "q" | ".quit" | ".exit" => Some(LocalCommand::Quit),
+        "doctor" | ".doctor" => Some(LocalCommand::Doctor),
         _ => None,
     }
 }
@@ -252,8 +274,108 @@ fn run_local_command(command: LocalCommand, output: OutputMode) -> anyhow::Resul
             io::stdout().flush()?;
         }
         LocalCommand::Quit => {}
+        LocalCommand::Doctor => {}
     }
     Ok(())
+}
+
+async fn run_doctor(address: &str, output: OutputMode) -> anyhow::Result<bool> {
+    println!("Nova CLI doctor");
+    println!("address {address}");
+
+    match ClientConnection::connect(address).await {
+        Ok(mut connection) => {
+            print_doctor_line(output, true, "tcp connect", address);
+            run_doctor_on_connection(&mut connection, address, output).await
+        }
+        Err(error) => {
+            print_doctor_line(
+                output,
+                false,
+                "tcp connect",
+                &format!("{address} ({})", error.root_cause()),
+            );
+            println!();
+            println!("{}", connection_hint(address));
+            Ok(false)
+        }
+    }
+}
+
+async fn run_doctor_on_connection(
+    connection: &mut ClientConnection,
+    address: &str,
+    output: OutputMode,
+) -> anyhow::Result<bool> {
+    let mut healthy = true;
+
+    match connection.send("PING").await {
+        Ok(response) if response == "PONG" => {
+            print_doctor_line(output, true, "PING", "PONG");
+        }
+        Ok(response) => {
+            healthy = false;
+            print_doctor_line(
+                output,
+                false,
+                "PING",
+                &format!("unexpected response: {response}"),
+            );
+        }
+        Err(error) => {
+            healthy = false;
+            print_doctor_line(output, false, "PING", &error.to_string());
+        }
+    }
+
+    match connection.send("INFO").await {
+        Ok(response) if response.starts_with("INFO ") => {
+            print_doctor_line(output, true, "INFO", "server metadata available");
+            if !output.raw {
+                println!();
+                println!("Server info:");
+                for line in format_response(&response, output).lines() {
+                    println!("  {line}");
+                }
+            } else {
+                println!("{response}");
+            }
+        }
+        Ok(response) => {
+            healthy = false;
+            print_doctor_line(
+                output,
+                false,
+                "INFO",
+                &format!("unexpected response: {response}"),
+            );
+        }
+        Err(error) => {
+            healthy = false;
+            print_doctor_line(output, false, "INFO", &error.to_string());
+        }
+    }
+
+    if healthy {
+        println!();
+        print_doctor_line(
+            output,
+            true,
+            "result",
+            &format!("Nova is reachable at {address}"),
+        );
+    }
+
+    Ok(healthy)
+}
+
+fn print_doctor_line(output: OutputMode, ok: bool, label: &str, detail: &str) {
+    let status = if ok {
+        colorize(output.color, "32", "[ok]")
+    } else {
+        colorize(output.color, "31", "[fail]")
+    };
+    println!("{status} {label:<12} {detail}");
 }
 
 fn command_help() -> &'static str {
@@ -269,6 +391,7 @@ Server commands:
 Local commands:
   HELP, ?, .help       Show this help
   CLEAR, .clear        Clear the terminal
+  DOCTOR, .doctor      Check TCP connectivity and server metadata
   QUIT, EXIT, Q        Exit interactive mode
 
 Connection:
@@ -475,6 +598,7 @@ mod tests {
         assert_eq!(parse_local_command("HELP"), Some(LocalCommand::Help));
         assert_eq!(parse_local_command("?"), Some(LocalCommand::Help));
         assert_eq!(parse_local_command(".clear"), Some(LocalCommand::Clear));
+        assert_eq!(parse_local_command("doctor"), Some(LocalCommand::Doctor));
         assert_eq!(parse_local_command("q"), Some(LocalCommand::Quit));
         assert_eq!(parse_local_command("PING"), None);
     }

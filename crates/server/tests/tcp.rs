@@ -1,4 +1,4 @@
-use std::{net::SocketAddr, sync::Arc};
+use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use nova_engine::Engine;
 use nova_server::{ServerLimits, serve_with_limits_until_shutdown};
@@ -162,8 +162,8 @@ async fn shutdown_closes_idle_connections() {
 #[tokio::test]
 async fn rejects_oversized_requests() {
     let limits = ServerLimits {
-        max_connections: 1024,
         max_request_bytes: 8,
+        ..ServerLimits::default()
     };
     let (address, shutdown, server) = start_server_with_limits(limits).await;
 
@@ -181,6 +181,7 @@ async fn rejects_connections_over_the_limit() {
     let limits = ServerLimits {
         max_connections: 1,
         max_request_bytes: 1024,
+        ..ServerLimits::default()
     };
     let (address, shutdown, server) = start_server_with_limits(limits).await;
     let first = TcpStream::connect(address)
@@ -210,6 +211,38 @@ async fn rejects_connections_over_the_limit() {
             .expect("read rejection")
             .expect("rejection response"),
         "ERR TOO_MANY_CONNECTIONS maximum connection limit reached"
+    );
+
+    shutdown.send(()).expect("send shutdown");
+    server.await.expect("server task");
+}
+
+#[tokio::test]
+async fn closes_idle_connections_after_timeout() {
+    let limits = ServerLimits {
+        client_idle_timeout: Duration::from_millis(50),
+        ..ServerLimits::default()
+    };
+    let (address, shutdown, server) = start_server_with_limits(limits).await;
+    let stream = TcpStream::connect(address)
+        .await
+        .expect("connect idle client");
+    let mut lines = BufReader::new(stream).lines();
+
+    assert_eq!(
+        lines
+            .next_line()
+            .await
+            .expect("read idle timeout")
+            .expect("idle timeout response"),
+        "ERR IDLE_TIMEOUT connection idle for more than 50 ms"
+    );
+    assert!(
+        lines
+            .next_line()
+            .await
+            .expect("read eof after idle timeout")
+            .is_none()
     );
 
     shutdown.send(()).expect("send shutdown");

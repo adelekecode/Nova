@@ -5,6 +5,7 @@ use std::{
     io::{self, ErrorKind, IsTerminal},
     path::{Path, PathBuf},
     sync::Arc,
+    time::Duration,
 };
 
 use anyhow::{Context, anyhow};
@@ -17,6 +18,7 @@ use tokio::{
     net::{TcpListener, TcpStream},
     sync::{Mutex, watch},
     task::JoinSet,
+    time::timeout,
 };
 use tracing::{info, warn};
 
@@ -39,6 +41,8 @@ pub type SharedEngine = Arc<Mutex<Engine>>;
 pub const MAX_REQUEST_BYTES: usize = 8 * 1024;
 /// Maximum number of concurrently active TCP connections.
 pub const MAX_CONNECTIONS: usize = 1024;
+/// Maximum time a client can stay connected without completing a request line, in milliseconds.
+pub const CLIENT_IDLE_TIMEOUT_MS: u64 = 60_000;
 
 /// Runtime limits for the TCP server.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -47,6 +51,8 @@ pub struct ServerLimits {
     pub max_connections: usize,
     /// Maximum accepted request line length, in bytes.
     pub max_request_bytes: usize,
+    /// Maximum time a client can stay connected without completing a request line.
+    pub client_idle_timeout: Duration,
 }
 
 /// Complete runtime configuration for `nova-server`.
@@ -86,6 +92,8 @@ pub struct ServerConfigOverrides {
     pub max_connections: Option<usize>,
     /// Override for [`ServerLimits::max_request_bytes`].
     pub max_request_bytes: Option<usize>,
+    /// Override for [`ServerLimits::client_idle_timeout`], in milliseconds.
+    pub client_idle_timeout_ms: Option<u64>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -96,6 +104,7 @@ struct ConfigFile {
     no_banner: Option<bool>,
     max_connections: Option<usize>,
     max_request_bytes: Option<usize>,
+    client_idle_timeout_ms: Option<u64>,
 }
 
 impl From<ConfigFile> for ServerConfigOverrides {
@@ -106,6 +115,7 @@ impl From<ConfigFile> for ServerConfigOverrides {
             no_banner: value.no_banner,
             max_connections: value.max_connections,
             max_request_bytes: value.max_request_bytes,
+            client_idle_timeout_ms: value.client_idle_timeout_ms,
         }
     }
 }
@@ -115,6 +125,7 @@ impl Default for ServerLimits {
         Self {
             max_connections: MAX_CONNECTIONS,
             max_request_bytes: MAX_REQUEST_BYTES,
+            client_idle_timeout: Duration::from_millis(CLIENT_IDLE_TIMEOUT_MS),
         }
     }
 }
@@ -151,7 +162,19 @@ fn server_config_overrides_from_env() -> anyhow::Result<ServerConfigOverrides> {
         no_banner: parse_optional_bool_env("NOVA_NO_BANNER")?,
         max_connections: parse_optional_usize_env("NOVA_MAX_CONNECTIONS")?,
         max_request_bytes: parse_optional_usize_env("NOVA_MAX_REQUEST_BYTES")?,
+        client_idle_timeout_ms: parse_optional_u64_env("NOVA_CLIENT_IDLE_TIMEOUT_MS")?,
     })
+}
+
+fn parse_optional_u64_env(name: &str) -> anyhow::Result<Option<u64>> {
+    std::env::var(name)
+        .ok()
+        .map(|value| {
+            value
+                .parse()
+                .with_context(|| format!("{name} must be a non-negative integer"))
+        })
+        .transpose()
 }
 
 fn parse_optional_usize_env(name: &str) -> anyhow::Result<Option<usize>> {
@@ -209,6 +232,9 @@ fn apply_overrides(config: &mut ServerConfig, overrides: ServerConfigOverrides) 
     }
     if let Some(max_request_bytes) = overrides.max_request_bytes {
         config.limits.max_request_bytes = max_request_bytes;
+    }
+    if let Some(client_idle_timeout_ms) = overrides.client_idle_timeout_ms {
+        config.limits.client_idle_timeout = Duration::from_millis(client_idle_timeout_ms);
     }
 }
 
@@ -299,6 +325,7 @@ pub async fn serve_with_limits_until_shutdown(
         tokio::select! {
             accepted = listener.accept() => {
                 let (mut stream, peer) = accepted.context("failed to accept connection")?;
+                drain_finished_connections(&mut connections);
                 if connections.len() >= limits.max_connections {
                     if let Err(error) = reject_connection(&mut stream).await {
                         warn!(%peer, %error, "failed to reject connection");
@@ -308,10 +335,17 @@ pub async fn serve_with_limits_until_shutdown(
                 let engine = Arc::clone(&engine);
                 let shutdown_receiver = shutdown_receiver.clone();
                 let max_request_bytes = limits.max_request_bytes;
+                let client_idle_timeout = limits.client_idle_timeout;
                 connections.spawn(async move {
                     (
                         peer,
-                        handle_connection(stream, engine, shutdown_receiver, max_request_bytes).await,
+                        handle_connection(
+                            stream,
+                            engine,
+                            shutdown_receiver,
+                            max_request_bytes,
+                            client_idle_timeout,
+                        ).await,
                     )
                 });
             }
@@ -340,6 +374,14 @@ pub async fn serve_with_limits_until_shutdown(
     Ok(())
 }
 
+fn drain_finished_connections(
+    connections: &mut JoinSet<(std::net::SocketAddr, anyhow::Result<()>)>,
+) {
+    while let Some(connection) = connections.try_join_next() {
+        log_connection_result(connection);
+    }
+}
+
 async fn reject_connection(stream: &mut TcpStream) -> anyhow::Result<()> {
     stream
         .write_all(b"ERR TOO_MANY_CONNECTIONS maximum connection limit reached\n")
@@ -363,20 +405,21 @@ async fn handle_connection(
     engine: SharedEngine,
     mut shutdown: watch::Receiver<bool>,
     max_request_bytes: usize,
+    client_idle_timeout: Duration,
 ) -> anyhow::Result<()> {
     let (reader, mut writer) = stream.into_split();
     let mut reader = BufReader::new(reader);
 
     loop {
         tokio::select! {
-            line = read_line_limited(&mut reader, max_request_bytes) => {
-                match line? {
-                    ReadLine::Line(line) => {
+            line = timeout(client_idle_timeout, read_line_limited(&mut reader, max_request_bytes)) => {
+                match line {
+                    Ok(Ok(ReadLine::Line(line))) => {
                         let response = execute(&line, &engine).await;
                         writer.write_all(response.as_bytes()).await?;
                         writer.write_all(b"\n").await?;
                     }
-                    ReadLine::TooLarge => {
+                    Ok(Ok(ReadLine::TooLarge)) => {
                         writer
                             .write_all(
                                 format!(
@@ -388,7 +431,21 @@ async fn handle_connection(
                         writer.shutdown().await?;
                         return Ok(());
                     }
-                    ReadLine::Eof => return Ok(()),
+                    Ok(Ok(ReadLine::Eof)) => return Ok(()),
+                    Ok(Err(error)) => return Err(error.into()),
+                    Err(_) => {
+                        writer
+                            .write_all(
+                                format!(
+                                    "ERR IDLE_TIMEOUT connection idle for more than {} ms\n",
+                                    client_idle_timeout.as_millis()
+                                )
+                                .as_bytes(),
+                            )
+                            .await?;
+                        writer.shutdown().await?;
+                        return Ok(());
+                    }
                 }
             }
             changed = shutdown.changed() => {
@@ -516,6 +573,7 @@ async fn execute(input: &str, engine: &Mutex<Engine>) -> String {
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
+    use std::time::Duration;
 
     use super::{
         ServerConfig, ServerConfigOverrides, ServerLimits, read_config_file, resolve_server_config,
@@ -530,6 +588,7 @@ mod tests {
                 no_banner: Some(true),
                 max_connections: Some(10),
                 max_request_bytes: Some(100),
+                client_idle_timeout_ms: Some(1_000),
             },
             ServerConfigOverrides {
                 listen: Some("127.0.0.1:8000".to_owned()),
@@ -537,6 +596,7 @@ mod tests {
                 no_banner: Some(false),
                 max_connections: Some(20),
                 max_request_bytes: Some(200),
+                client_idle_timeout_ms: Some(2_000),
             },
             ServerConfigOverrides {
                 listen: Some("127.0.0.1:9000".to_owned()),
@@ -544,6 +604,7 @@ mod tests {
                 no_banner: Some(true),
                 max_connections: None,
                 max_request_bytes: Some(300),
+                client_idle_timeout_ms: None,
             },
         );
 
@@ -556,6 +617,7 @@ mod tests {
                 limits: ServerLimits {
                     max_connections: 20,
                     max_request_bytes: 300,
+                    client_idle_timeout: Duration::from_millis(2_000),
                 },
             }
         );
@@ -573,6 +635,7 @@ data_dir = "/tmp/nova-test"
 no_banner = true
 max_connections = 64
 max_request_bytes = 4096
+client_idle_timeout_ms = 1234
 "#,
         )
         .unwrap();
@@ -589,5 +652,9 @@ max_request_bytes = 4096
         assert!(config.no_banner);
         assert_eq!(config.limits.max_connections, 64);
         assert_eq!(config.limits.max_request_bytes, 4096);
+        assert_eq!(
+            config.limits.client_idle_timeout,
+            Duration::from_millis(1234)
+        );
     }
 }

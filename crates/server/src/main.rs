@@ -28,6 +28,9 @@ struct Arguments {
     /// Maximum accepted request line length, in bytes.
     #[arg(long)]
     max_request_bytes: Option<usize>,
+    /// Maximum time a client can stay connected without completing a request line, in milliseconds.
+    #[arg(long)]
+    client_idle_timeout_ms: Option<u64>,
     /// Suppress the startup banner.
     #[arg(long)]
     no_banner: bool,
@@ -48,6 +51,7 @@ async fn main() -> anyhow::Result<()> {
             no_banner: arguments.no_banner.then_some(true),
             max_connections: arguments.max_connections,
             max_request_bytes: arguments.max_request_bytes,
+            client_idle_timeout_ms: arguments.client_idle_timeout_ms,
         },
     )?;
     let engine = Arc::new(Mutex::new(
