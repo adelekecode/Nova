@@ -128,6 +128,11 @@ impl Engine {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        fs::{self, OpenOptions},
+        io::Write,
+    };
+
     use nova_storage::WalError;
     use nova_types::{MetricName, Point};
     use tempfile::tempdir;
@@ -232,5 +237,45 @@ mod tests {
             ]
         );
         assert_eq!(engine.point_count(), 3);
+    }
+
+    #[test]
+    fn repairs_truncated_wal_tail_on_startup() {
+        let directory = tempdir().unwrap();
+        let metric = MetricName::new("temperature").unwrap();
+        {
+            let mut engine = Engine::open(directory.path()).unwrap();
+            engine.write(metric.clone(), &Point::new(100, 1.0)).unwrap();
+            engine.write(metric.clone(), &Point::new(200, 2.0)).unwrap();
+        }
+
+        let wal_path = directory.path().join("nova.wal");
+        let valid_len = fs::metadata(&wal_path).unwrap().len();
+        OpenOptions::new()
+            .append(true)
+            .open(&wal_path)
+            .unwrap()
+            .write_all(b"NV")
+            .unwrap();
+
+        {
+            let mut engine = Engine::open(directory.path()).unwrap();
+            assert_eq!(
+                engine.range(&metric, 0, 300).unwrap(),
+                vec![Point::new(100, 1.0), Point::new(200, 2.0)]
+            );
+            assert_eq!(fs::metadata(&wal_path).unwrap().len(), valid_len);
+            engine.write(metric.clone(), &Point::new(300, 3.0)).unwrap();
+        }
+
+        let engine = Engine::open(directory.path()).unwrap();
+        assert_eq!(
+            engine.range(&metric, 0, 400).unwrap(),
+            vec![
+                Point::new(100, 1.0),
+                Point::new(200, 2.0),
+                Point::new(300, 3.0)
+            ]
+        );
     }
 }

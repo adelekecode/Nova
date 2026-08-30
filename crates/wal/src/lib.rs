@@ -9,6 +9,7 @@ use nova_types::{MetricName, Point};
 use thiserror::Error;
 
 const MAGIC: [u8; 4] = *b"NVW1";
+const HEADER_BYTES: usize = 12;
 const MAX_PAYLOAD_BYTES: u32 = 1024;
 
 /// An append-only write-ahead log.
@@ -113,13 +114,12 @@ impl Wal {
 
         let mut reader = BufReader::new(File::open(path)?);
         let mut records = Vec::new();
+        let mut valid_len = 0_u64;
 
         loop {
-            let mut header = [0_u8; 12];
-            match reader.read_exact(&mut header) {
-                Ok(()) => {}
-                Err(error) if error.kind() == ErrorKind::UnexpectedEof => break,
-                Err(error) => return Err(error.into()),
+            let mut header = [0_u8; HEADER_BYTES];
+            if !read_exact_or_repair_tail(&mut reader, &mut header, path, valid_len, true)? {
+                break;
             }
 
             if header[0..4] != MAGIC {
@@ -132,7 +132,9 @@ impl Wal {
             let expected_checksum =
                 u32::from_le_bytes([header[8], header[9], header[10], header[11]]);
             let mut payload = vec![0_u8; payload_len as usize];
-            reader.read_exact(&mut payload)?;
+            if !read_exact_or_repair_tail(&mut reader, &mut payload, path, valid_len, false)? {
+                break;
+            }
 
             let mut hasher = Hasher::new();
             hasher.update(&payload);
@@ -140,10 +142,41 @@ impl Wal {
                 return Err(WalError::Corrupt("checksum mismatch"));
             }
             records.push(decode_payload(&payload)?);
+            valid_len += HEADER_BYTES as u64 + u64::from(payload_len);
         }
 
         Ok(records)
     }
+}
+
+fn read_exact_or_repair_tail(
+    reader: &mut impl Read,
+    buffer: &mut [u8],
+    path: &Path,
+    valid_len: u64,
+    clean_eof_at_boundary: bool,
+) -> Result<bool, WalError> {
+    let mut read = 0;
+    while read < buffer.len() {
+        match reader.read(&mut buffer[read..]) {
+            Ok(0) if read == 0 && clean_eof_at_boundary => return Ok(false),
+            Ok(0) => {
+                repair_tail(path, valid_len)?;
+                return Ok(false);
+            }
+            Ok(bytes) => read += bytes,
+            Err(error) if error.kind() == ErrorKind::Interrupted => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(true)
+}
+
+fn repair_tail(path: &Path, valid_len: u64) -> Result<(), WalError> {
+    let file = OpenOptions::new().write(true).open(path)?;
+    file.set_len(valid_len)?;
+    file.sync_data()?;
+    Ok(())
 }
 
 fn decode_payload(payload: &[u8]) -> Result<WalRecord, WalError> {
@@ -179,10 +212,15 @@ fn decode_payload(payload: &[u8]) -> Result<WalRecord, WalError> {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        fs::{self, OpenOptions},
+        io::{Seek, SeekFrom, Write},
+    };
+
     use nova_types::{MetricName, Point};
     use tempfile::tempdir;
 
-    use super::{Wal, WalError};
+    use super::{HEADER_BYTES, MAGIC, Wal, WalError};
 
     #[test]
     fn error_codes_are_stable() {
@@ -207,5 +245,95 @@ mod tests {
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].metric, metric);
         assert_eq!(records[0].point, point);
+    }
+
+    #[test]
+    fn repairs_truncated_header_tail() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("nova.wal");
+        let metric = MetricName::new("cpu.usage").unwrap();
+
+        let mut wal = Wal::open(&path).unwrap();
+        wal.append(&metric, &Point::new(100, 1.5)).unwrap();
+        wal.append(&metric, &Point::new(200, 2.5)).unwrap();
+        drop(wal);
+        let valid_len = fs::metadata(&path).unwrap().len();
+
+        OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(&MAGIC[0..2])
+            .unwrap();
+
+        let records = Wal::replay(&path).unwrap();
+        assert_eq!(records.len(), 2);
+        assert_eq!(fs::metadata(&path).unwrap().len(), valid_len);
+
+        let mut wal = Wal::open(&path).unwrap();
+        wal.append(&metric, &Point::new(300, 3.5)).unwrap();
+        drop(wal);
+
+        let records = Wal::replay(&path).unwrap();
+        assert_eq!(
+            records
+                .iter()
+                .map(|record| record.point.clone())
+                .collect::<Vec<_>>(),
+            vec![
+                Point::new(100, 1.5),
+                Point::new(200, 2.5),
+                Point::new(300, 3.5)
+            ]
+        );
+    }
+
+    #[test]
+    fn repairs_truncated_payload_tail() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("nova.wal");
+        let metric = MetricName::new("cpu.usage").unwrap();
+
+        let mut wal = Wal::open(&path).unwrap();
+        wal.append(&metric, &Point::new(100, 1.5)).unwrap();
+        drop(wal);
+        let valid_len = fs::metadata(&path).unwrap().len();
+
+        let mut wal = Wal::open(&path).unwrap();
+        wal.append(&metric, &Point::new(200, 2.5)).unwrap();
+        drop(wal);
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_len(valid_len + HEADER_BYTES as u64 + 3)
+            .unwrap();
+
+        let records = Wal::replay(&path).unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].point, Point::new(100, 1.5));
+        assert_eq!(fs::metadata(&path).unwrap().len(), valid_len);
+    }
+
+    #[test]
+    fn complete_corrupt_frames_fail_without_repair() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("nova.wal");
+        let metric = MetricName::new("cpu.usage").unwrap();
+
+        let mut wal = Wal::open(&path).unwrap();
+        wal.append(&metric, &Point::new(100, 1.5)).unwrap();
+        drop(wal);
+        let valid_len = fs::metadata(&path).unwrap().len();
+
+        let mut file = OpenOptions::new().write(true).open(&path).unwrap();
+        file.seek(SeekFrom::Start(HEADER_BYTES as u64)).unwrap();
+        file.write_all(&[0xFF]).unwrap();
+        file.sync_data().unwrap();
+        drop(file);
+
+        let error = Wal::replay(&path).unwrap_err();
+        assert!(matches!(error, WalError::Corrupt("checksum mismatch")));
+        assert_eq!(fs::metadata(&path).unwrap().len(), valid_len);
     }
 }

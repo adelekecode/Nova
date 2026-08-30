@@ -76,7 +76,7 @@ not a claim Nova makes today.
 
 - [x] End-to-end tests that launch the server and exercise real client connections
 - [ ] Clean shutdown with a final durability barrier
-- [ ] Torn/truncated WAL-tail detection and safe repair
+- [x] Torn/truncated WAL-tail detection and safe repair
 - [ ] Maximum frame, metric, request, and connection limits
 - [x] Duplicate timestamp and out-of-order write semantics
 - [ ] Batch write command with atomicity rules
