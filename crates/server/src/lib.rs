@@ -9,7 +9,8 @@ use nova_types::Point;
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     net::{TcpListener, TcpStream},
-    sync::Mutex,
+    sync::{Mutex, watch},
+    task::JoinSet,
 };
 use tracing::{info, warn};
 
@@ -93,37 +94,80 @@ pub async fn serve_until_shutdown(
 ) -> anyhow::Result<()> {
     let shutdown = shutdown;
     tokio::pin!(shutdown);
+    let (shutdown_sender, shutdown_receiver) = watch::channel(false);
+    let mut connections = JoinSet::new();
 
     loop {
         tokio::select! {
             accepted = listener.accept() => {
                 let (stream, peer) = accepted.context("failed to accept connection")?;
                 let engine = Arc::clone(&engine);
-                tokio::spawn(async move {
-                    if let Err(error) = handle_connection(stream, engine).await {
-                        warn!(%peer, %error, "connection failed");
-                    }
+                let shutdown_receiver = shutdown_receiver.clone();
+                connections.spawn(async move {
+                    (peer, handle_connection(stream, engine, shutdown_receiver).await)
                 });
+            }
+            Some(connection) = connections.join_next(), if !connections.is_empty() => {
+                log_connection_result(connection);
             }
             signal = &mut shutdown => {
                 signal?;
                 info!("Nova is shutting down");
-                return Ok(());
+                break;
             }
         }
     }
+
+    let _ = shutdown_sender.send(true);
+    while let Some(connection) = connections.join_next().await {
+        log_connection_result(connection);
+    }
+
+    engine
+        .lock()
+        .await
+        .flush()
+        .context("failed to flush Nova engine during shutdown")?;
+    info!("Nova shutdown complete");
+    Ok(())
 }
 
-async fn handle_connection(stream: TcpStream, engine: SharedEngine) -> anyhow::Result<()> {
+fn log_connection_result(
+    connection: Result<(std::net::SocketAddr, anyhow::Result<()>), tokio::task::JoinError>,
+) {
+    match connection {
+        Ok((_, Ok(()))) => {}
+        Ok((peer, Err(error))) => warn!(%peer, %error, "connection failed"),
+        Err(error) => warn!(%error, "connection task failed"),
+    }
+}
+
+async fn handle_connection(
+    stream: TcpStream,
+    engine: SharedEngine,
+    mut shutdown: watch::Receiver<bool>,
+) -> anyhow::Result<()> {
     let (reader, mut writer) = stream.into_split();
     let mut lines = BufReader::new(reader).lines();
 
-    while let Some(line) = lines.next_line().await? {
-        let response = execute(&line, &engine).await;
-        writer.write_all(response.as_bytes()).await?;
-        writer.write_all(b"\n").await?;
+    loop {
+        tokio::select! {
+            line = lines.next_line() => {
+                let Some(line) = line? else {
+                    return Ok(());
+                };
+                let response = execute(&line, &engine).await;
+                writer.write_all(response.as_bytes()).await?;
+                writer.write_all(b"\n").await?;
+            }
+            changed = shutdown.changed() => {
+                if changed.is_err() || *shutdown.borrow() {
+                    writer.shutdown().await?;
+                    return Ok(());
+                }
+            }
+        }
     }
-    Ok(())
 }
 
 /// Formats a wire error response as `ERR <CODE> <message>`, where `code` is a stable,

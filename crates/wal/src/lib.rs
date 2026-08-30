@@ -97,6 +97,17 @@ impl Wal {
         self.file.write_all(&payload_len.to_le_bytes())?;
         self.file.write_all(&checksum.to_le_bytes())?;
         self.file.write_all(&payload)?;
+        self.flush()?;
+        Ok(())
+    }
+
+    /// Flushes pending WAL writes through Nova's durability boundary.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if buffered data cannot be flushed or synchronized.
+    pub fn flush(&mut self) -> Result<(), WalError> {
+        self.file.flush()?;
         self.file.sync_data()?;
         Ok(())
     }

@@ -4,7 +4,7 @@ use nova_engine::Engine;
 use nova_server::serve_until_shutdown;
 use tempfile::tempdir;
 use tokio::{
-    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+    io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
     net::{TcpListener, TcpStream},
     sync::{Mutex, oneshot},
 };
@@ -104,5 +104,25 @@ async fn reports_structured_errors_over_tcp() {
     );
 
     shutdown.send(()).expect("send shutdown");
+    server.await.expect("server task");
+}
+
+#[tokio::test]
+async fn shutdown_closes_idle_connections() {
+    let (address, shutdown, server) = start_server().await;
+    let mut stream = TcpStream::connect(address)
+        .await
+        .expect("connect to server");
+
+    stream.write_all(b"PING\n").await.expect("write ping");
+    let mut reader = BufReader::new(stream);
+    let mut response = String::new();
+    reader.read_line(&mut response).await.expect("read pong");
+    assert_eq!(response.trim_end(), "PONG");
+
+    shutdown.send(()).expect("send shutdown");
+
+    let mut buffer = [0_u8; 1];
+    assert_eq!(reader.read(&mut buffer).await.expect("read eof"), 0);
     server.await.expect("server task");
 }

@@ -19,7 +19,8 @@ granular, fast-moving implementation tasks that don't belong in the public-facin
 - [x] End-to-end tests that launch the server and exercise real client connections — covered by
   `nova-server` TCP integration tests that bind an ephemeral local listener, reuse a client
   connection across `PING`/`WRITE`/`RANGE`, and verify structured error responses
-- [ ] Clean shutdown with a final durability barrier
+- [x] Clean shutdown with a final durability barrier — shutdown now stops accepting connections,
+  signals active handlers to exit, waits for them, and performs an explicit final engine/WAL flush
 - [x] Torn/truncated WAL-tail detection and safe repair — `Wal::replay` now truncates incomplete
   final headers or payloads back to the last valid frame while preserving hard failures for
   complete corrupt frames

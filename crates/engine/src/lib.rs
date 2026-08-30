@@ -84,6 +84,16 @@ impl Engine {
         Ok(())
     }
 
+    /// Flushes pending durable state before shutdown.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the WAL cannot be synchronized.
+    pub fn flush(&mut self) -> Result<(), EngineError> {
+        self.wal.flush()?;
+        Ok(())
+    }
+
     /// Returns points inclusively between `start` and `end`, ordered by timestamp.
     ///
     /// # Errors

@@ -75,7 +75,7 @@ not a claim Nova makes today.
 ### Required to complete the slice
 
 - [x] End-to-end tests that launch the server and exercise real client connections
-- [ ] Clean shutdown with a final durability barrier
+- [x] Clean shutdown with a final durability barrier
 - [x] Torn/truncated WAL-tail detection and safe repair
 - [ ] Maximum frame, metric, request, and connection limits
 - [x] Duplicate timestamp and out-of-order write semantics
