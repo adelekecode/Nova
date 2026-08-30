@@ -5,7 +5,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use nova_storage::{Wal, WalError};
+use nova_storage::{Wal, WalError, WalRecord};
 use nova_types::{MetricName, Point};
 use thiserror::Error;
 
@@ -81,6 +81,33 @@ impl Engine {
             .entry(metric)
             .or_default()
             .insert(point.timestamp, point.value);
+        Ok(())
+    }
+
+    /// Durably writes a batch of points as a single atomic WAL frame.
+    ///
+    /// The batch becomes visible only after the full frame has been written and synchronized.
+    /// Within the batch, duplicate `(metric, timestamp)` pairs use the last value in command
+    /// order, matching repeated [`Engine::write`] calls.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the batch cannot be appended and synchronized to the WAL.
+    pub fn write_batch(
+        &mut self,
+        records: impl IntoIterator<Item = (MetricName, Point)>,
+    ) -> Result<(), EngineError> {
+        let records: Vec<_> = records
+            .into_iter()
+            .map(|(metric, point)| WalRecord { metric, point })
+            .collect();
+        self.wal.append_batch(&records)?;
+        for record in records {
+            self.series
+                .entry(record.metric)
+                .or_default()
+                .insert(record.point.timestamp, record.point.value);
+        }
         Ok(())
     }
 
@@ -247,6 +274,42 @@ mod tests {
             ]
         );
         assert_eq!(engine.point_count(), 3);
+    }
+
+    #[test]
+    fn batch_writes_are_visible_and_survive_restart() {
+        let directory = tempdir().unwrap();
+        let cpu = MetricName::new("cpu.usage").unwrap();
+        let mem = MetricName::new("mem.used").unwrap();
+        {
+            let mut engine = Engine::open(directory.path()).unwrap();
+            engine
+                .write_batch([
+                    (cpu.clone(), Point::new(100, 1.0)),
+                    (mem.clone(), Point::new(100, 2.0)),
+                    (cpu.clone(), Point::new(100, 3.0)),
+                ])
+                .unwrap();
+
+            assert_eq!(
+                engine.range(&cpu, 0, 200).unwrap(),
+                vec![Point::new(100, 3.0)]
+            );
+            assert_eq!(
+                engine.range(&mem, 0, 200).unwrap(),
+                vec![Point::new(100, 2.0)]
+            );
+        }
+
+        let engine = Engine::open(directory.path()).unwrap();
+        assert_eq!(
+            engine.range(&cpu, 0, 200).unwrap(),
+            vec![Point::new(100, 3.0)]
+        );
+        assert_eq!(
+            engine.range(&mem, 0, 200).unwrap(),
+            vec![Point::new(100, 2.0)]
+        );
     }
 
     #[test]

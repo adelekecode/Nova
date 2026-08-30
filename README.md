@@ -18,7 +18,7 @@ Nova is an open-source time-series database inspired by the qualities that made 
 a small command path, predictable latency, operational simplicity, and an architecture engineers
 can understand.
 
-It applies those ideas to a different problem—storing and querying enormous streams of timestamped
+It applies those ideas to a different problem: storing and querying enormous streams of timestamped
 data. Nova is being designed for infrastructure metrics, IoT telemetry, financial ticks, energy
 systems, industrial sensors, and every environment where data arrives continuously and recent
 answers need to be fast.
@@ -49,6 +49,24 @@ job exceptionally well:
 
 > Ingest timestamped data continuously, retain it efficiently, and answer time-oriented questions
 > with predictable speed.
+
+## Project direction
+
+Nova is currently proving the single-node durability boundary before moving into the storage engine
+that will make it a serious time-series system. The project is intentionally walking through the
+database in layers:
+
+- A small TCP command path with clear, machine-readable errors
+- Durable WAL-backed writes and deterministic restart recovery
+- Explicit crash, corruption, shutdown, and resource-limit behavior
+- Bounded in-memory time-series segments
+- Immutable segment files with checksums, manifests, snapshots, and repair tooling
+- Compression, labels, indexing, aggregation, retention, and downsampling
+- Benchmarks and observability before any performance claims
+- Ecosystem integrations only after the core semantics are solid
+
+That order matters. Nova should become fast because its storage and execution model are measured
+and understood, not because the project skipped over recovery, limits, or operator trust.
 
 ## Why build another time-series database?
 
@@ -105,12 +123,12 @@ candidate series without scanning every metric.
 Those are design targets, not current claims. Each technique will earn its place through
 reproducible benchmarks, failure testing, and documented tradeoffs.
 
-## The road ahead
+## Where we are
 
 Nova is being built in deliberate layers:
 
 1. **Durable vertical slice** — WAL-backed writes, restart recovery, time-range reads, TCP server,
-   CLI, and correctness tests.
+   CLI, bounded requests/connections, clean shutdown, batch writes, and correctness tests.
 2. **Segmented storage** — bounded memory segments, immutable disk segments, timestamp/value
    compression, snapshots, retention, and background flushing.
 3. **Query and indexing** — labels, inverted indexes, aggregations, downsampling, query limits,
@@ -120,23 +138,23 @@ Nova is being built in deliberate layers:
 5. **Distributed Nova** — streaming replication, failover, partitioning, sharding, and tiered
    object storage after the single-node engine is proven.
 
+Nova is in **Milestone 1: durable single-node vertical slice**. The remaining work in this milestone
+is focused on API shape and operational behavior before the project moves into segmented storage:
+
+| Milestone 1 area | Status |
+| --- | --- |
+| WAL-backed writes, restart recovery, TCP server, CLI, range reads | Complete |
+| Real TCP integration tests | Complete |
+| Clean shutdown and final durability flush | Complete |
+| Torn/truncated WAL-tail repair | Complete |
+| Metric, WAL-frame, request, and connection limits | Complete |
+| Duplicate timestamp and out-of-order write semantics | Complete |
+| Batch write command with atomicity rules | Complete |
+| Config file and precedence rules | Planned |
+| Graceful resource exhaustion behavior | Planned |
+
 See the complete [development roadmap](ROADMAP.md), [architecture](ARCHITECTURE.md), and
 [project vision](docs/VISION.md).
-
-## What works today
-
-Nova already has a small end-to-end durable path:
-
-- Validated metric names and timestamped `f64` samples
-- A checksummed append-only write-ahead log
-- Recovery that rebuilds the in-memory index after restart
-- Inclusive, timestamp-ordered range reads
-- An asynchronous TCP server and command-line client
-- Automated formatting, linting, and tests
-
-The current milestone is intentionally narrow: write a point, persist it, restart Nova, and read
-that point back by time range. Building outward from a tested durability boundary gives future
-performance work a trustworthy base.
 
 ## Quick start
 
@@ -153,6 +171,7 @@ Then use the CLI from another terminal, either one command at a time:
 ```bash
 cargo run -p nova-cli -- PING
 cargo run -p nova-cli -- WRITE cpu.usage 1700000000000 42.5
+cargo run -p nova-cli -- BATCH cpu.usage 1700000001000 43.1 mem.used 1700000001000 80.0
 cargo run -p nova-cli -- RANGE cpu.usage 0 1800000000000
 cargo run -p nova-cli -- INFO
 ```
@@ -177,6 +196,7 @@ startup banner.
 | --- | --- |
 | `PING` | Check server health |
 | `WRITE <metric> <timestamp-ms> <value>` | Durably write one point |
+| `BATCH <metric> <timestamp-ms> <value> [<metric> <timestamp-ms> <value> ...]` | Durably write multiple points as one atomic WAL frame |
 | `RANGE <metric> <start-ms> <end-ms>` | Read an inclusive time range |
 | `INFO` | Show version, build, and metric/point counts |
 
@@ -192,6 +212,10 @@ allows up to 1,024 active TCP connections.
 the previously visible value. Points may be written in any timestamp order — Nova does not require
 monotonically increasing timestamps per metric — and `RANGE` always returns results in ascending
 timestamp order regardless of the order they were written or replayed from the WAL in.
+
+`BATCH` validates every point before execution, persists the batch in one checksummed WAL frame,
+and makes the points visible only after that frame is durable. Duplicate `(metric, timestamp)` pairs
+inside a batch use the last value in command order.
 
 Failures respond with `ERR <CODE> <message>`, where `<CODE>` is a stable, machine-readable
 identifier that a client can match on without parsing the human-readable message:

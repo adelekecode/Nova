@@ -30,7 +30,8 @@ granular, fast-moving implementation tasks that don't belong in the public-facin
   `(metric, timestamp)` with no ordering requirement; documented on `Engine::write`/`range` and
   in the README protocol section, and locked in with three new engine tests covering duplicate
   overwrite, out-of-order insertion, and both surviving a WAL-replay restart
-- [ ] Batch write command with atomicity rules
+- [x] Batch write command with atomicity rules — `BATCH` validates all triples before execution,
+  writes the full batch as one WAL frame, and applies it to memory only after the frame is durable
 - [ ] Config file plus environment and command-line precedence
 - [x] Structured error codes rather than human-text-only errors — `ParseError`, `EngineError`,
   and `WalError` each expose a `code()` method returning a stable `SCREAMING_SNAKE_CASE`

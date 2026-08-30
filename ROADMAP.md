@@ -79,7 +79,7 @@ not a claim Nova makes today.
 - [x] Torn/truncated WAL-tail detection and safe repair
 - [x] Maximum frame, metric, request, and connection limits
 - [x] Duplicate timestamp and out-of-order write semantics
-- [ ] Batch write command with atomicity rules
+- [x] Batch write command with atomicity rules
 - [ ] Config file plus environment and command-line precedence
 - [x] Structured error codes rather than human-text-only errors
 - [x] Version and build metadata in `INFO`

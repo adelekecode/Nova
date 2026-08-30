@@ -77,16 +77,28 @@ async fn serves_real_tcp_commands() {
             "PING",
             "WRITE cpu.usage 100 1.5",
             "WRITE cpu.usage 200 2.5",
+            "BATCH mem.used 100 4.5 mem.used 200 5.5",
             "RANGE cpu.usage 0 200",
+            "RANGE mem.used 0 200",
         ],
     )
     .await;
-    assert_eq!(responses, ["PONG", "OK", "OK", "POINTS 2 100 1.5;200 2.5"]);
+    assert_eq!(
+        responses,
+        [
+            "PONG",
+            "OK",
+            "OK",
+            "OK",
+            "POINTS 2 100 1.5;200 2.5",
+            "POINTS 2 100 4.5;200 5.5"
+        ]
+    );
 
     let info = send(address, "INFO").await;
     assert!(info.starts_with("INFO version="), "{info}");
-    assert!(info.contains(" metrics=1 "), "{info}");
-    assert!(info.ends_with(" points=2"), "{info}");
+    assert!(info.contains(" metrics=2 "), "{info}");
+    assert!(info.ends_with(" points=4"), "{info}");
 
     shutdown.send(()).expect("send shutdown");
     server.await.expect("server task");
@@ -108,6 +120,20 @@ async fn reports_structured_errors_over_tcp() {
         send(address, "NOPE").await,
         "ERR UNKNOWN_COMMAND unknown command"
     );
+
+    shutdown.send(()).expect("send shutdown");
+    server.await.expect("server task");
+}
+
+#[tokio::test]
+async fn invalid_batch_does_not_partially_apply() {
+    let (address, shutdown, server) = start_server().await;
+
+    assert_eq!(
+        send(address, "BATCH cpu.usage 100 1.5 bad/name 100 2.5").await,
+        "ERR INVALID_METRIC invalid metric name"
+    );
+    assert_eq!(send(address, "RANGE cpu.usage 0 200").await, "POINTS 0 ");
 
     shutdown.send(()).expect("send shutdown");
     server.await.expect("server task");

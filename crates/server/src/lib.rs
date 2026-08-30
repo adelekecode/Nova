@@ -325,6 +325,15 @@ async fn execute(input: &str, engine: &Mutex<Engine>) -> String {
             Ok(()) => "OK".to_owned(),
             Err(error) => err(error.code(), error),
         },
+        Command::Batch { writes } => {
+            let records = writes
+                .into_iter()
+                .map(|write| (write.metric, Point::new(write.timestamp, write.value)));
+            match engine.lock().await.write_batch(records) {
+                Ok(()) => "OK".to_owned(),
+                Err(error) => err(error.code(), error),
+            }
+        }
         Command::Range { metric, start, end } => {
             match engine.lock().await.range(&metric, start, end) {
                 Ok(points) => {

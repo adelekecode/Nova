@@ -3,6 +3,17 @@
 use nova_types::MetricName;
 use thiserror::Error;
 
+/// One parsed write operation.
+#[derive(Clone, Debug, PartialEq)]
+pub struct WriteCommand {
+    /// Target metric.
+    pub metric: MetricName,
+    /// Unix timestamp in milliseconds.
+    pub timestamp: i64,
+    /// Sample value.
+    pub value: f64,
+}
+
 /// A parsed client command.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Command {
@@ -16,6 +27,11 @@ pub enum Command {
         timestamp: i64,
         /// Sample value.
         value: f64,
+    },
+    /// Persist multiple points atomically.
+    Batch {
+        /// Writes to apply as one durable batch.
+        writes: Vec<WriteCommand>,
     },
     /// Read an inclusive time range.
     Range {
@@ -81,12 +97,25 @@ pub fn parse(input: &str) -> Result<Command, ParseError> {
             timestamp: parts[2].parse().map_err(|_| ParseError::InvalidNumber)?,
             value: parts[3].parse().map_err(|_| ParseError::InvalidNumber)?,
         }),
+        "BATCH" if parts.len() >= 4 && (parts.len() - 1) % 3 == 0 => {
+            let writes = parts[1..]
+                .chunks_exact(3)
+                .map(|chunk| {
+                    Ok(WriteCommand {
+                        metric: MetricName::new(chunk[0]).map_err(|_| ParseError::InvalidMetric)?,
+                        timestamp: chunk[1].parse().map_err(|_| ParseError::InvalidNumber)?,
+                        value: chunk[2].parse().map_err(|_| ParseError::InvalidNumber)?,
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(Command::Batch { writes })
+        }
         "RANGE" if parts.len() == 4 => Ok(Command::Range {
             metric: MetricName::new(parts[1]).map_err(|_| ParseError::InvalidMetric)?,
             start: parts[2].parse().map_err(|_| ParseError::InvalidNumber)?,
             end: parts[3].parse().map_err(|_| ParseError::InvalidNumber)?,
         }),
-        "PING" | "INFO" | "WRITE" | "RANGE" => Err(ParseError::WrongArity),
+        "PING" | "INFO" | "WRITE" | "BATCH" | "RANGE" => Err(ParseError::WrongArity),
         _ => Err(ParseError::UnknownCommand),
     }
 }
@@ -111,6 +140,35 @@ mod tests {
     #[test]
     fn rejects_bad_arity() {
         assert_eq!(parse("RANGE cpu 1"), Err(ParseError::WrongArity));
+        assert_eq!(parse("BATCH cpu 1"), Err(ParseError::WrongArity));
+    }
+
+    #[test]
+    fn parses_batch_writes_atomically() {
+        let command = parse("BATCH cpu.usage 1000 42.5 mem.used 1000 12").unwrap();
+        let Command::Batch { writes } = command else {
+            panic!("expected batch command");
+        };
+
+        assert_eq!(writes.len(), 2);
+        assert_eq!(writes[0].metric.as_str(), "cpu.usage");
+        assert_eq!(writes[0].timestamp, 1000);
+        assert_eq!(writes[0].value.to_bits(), 42.5_f64.to_bits());
+        assert_eq!(writes[1].metric.as_str(), "mem.used");
+        assert_eq!(writes[1].timestamp, 1000);
+        assert_eq!(writes[1].value.to_bits(), 12.0_f64.to_bits());
+    }
+
+    #[test]
+    fn rejects_invalid_batch_members() {
+        assert_eq!(
+            parse("BATCH cpu.usage 1000 42.5 bad/name 1000 12"),
+            Err(ParseError::InvalidMetric)
+        );
+        assert_eq!(
+            parse("BATCH cpu.usage nope 42.5"),
+            Err(ParseError::InvalidNumber)
+        );
     }
 
     #[test]
