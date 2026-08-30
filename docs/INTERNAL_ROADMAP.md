@@ -11,8 +11,10 @@ granular, fast-moving implementation tasks that don't belong in the public-facin
 - [x] `nova-server` startup banner — version, listen address, PID, and data dir shown on launch
 - [x] `nova-cli` interactive REPL mode (connect once, issue multiple commands, like `redis-cli`)
 - [x] `nova-cli` colorized, pretty-printed responses (tables for `RANGE`, key/value for `INFO`)
-- [ ] `nova-cli` command history and line editing (currently plain stdin, no arrow-key recall)
-- [ ] `nova-cli` shorthand `-h`/`-p` host and port flags to match common client conventions
+- [x] `nova-cli` command history and line editing — backed by `rustyline`, with configurable
+  history storage and local `HELP`/`CLEAR`/`QUIT` commands
+- [x] `nova-cli` shorthand `-h`/`-p` host and port flags to match common client conventions,
+  while keeping `--help` available
 
 ### Still open from the original slice checklist (see `ROADMAP.md`)
 

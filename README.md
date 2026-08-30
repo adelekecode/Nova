@@ -150,7 +150,7 @@ is focused on API shape and operational behavior before the project moves into s
 | Metric, WAL-frame, request, and connection limits | Complete |
 | Duplicate timestamp and out-of-order write semantics | Complete |
 | Batch write command with atomicity rules | Complete |
-| Config file and precedence rules | Planned |
+| Config file and precedence rules | Complete |
 | Graceful resource exhaustion behavior | Planned |
 
 See the complete [development roadmap](ROADMAP.md), [architecture](ARCHITECTURE.md), and
@@ -186,9 +186,33 @@ nova> WRITE cpu.usage 1700000000000 42.5
 OK
 ```
 
+The interactive CLI keeps one server connection open, supports line editing and command history,
+and understands local commands such as `HELP`, `?`, `CLEAR`, `QUIT`, `EXIT`, and `Q`. History is
+stored at `~/.nova-cli-history` by default; use `--history-file path/to/history` to choose a
+different file or `--no-history` to disable it.
+
+`nova-cli` connects to `127.0.0.1:7422` by default. Use a full address:
+
+```bash
+cargo run -p nova-cli -- --address 127.0.0.1:7422 INFO
+```
+
+or split host and port, matching common database-client conventions:
+
+```bash
+cargo run -p nova-cli -- -h 127.0.0.1 -p 7422 INFO
+```
+
+The CLI also supports `NOVA_ADDRESS`, `NOVA_HOST`, `NOVA_PORT`, `NOVA_CLI_HISTORY`, `--raw`, and
+`--no-color`. Piped input is accepted and reuses one connection:
+
+```bash
+printf 'PING\nINFO\n' | cargo run -p nova-cli -- --raw
+```
+
 Nova listens on `127.0.0.1:7422` and stores data under `./nova-data` by default. Use `--listen`
-and `--data-dir` to change those values. Pass `--no-banner` to `nova-server` to suppress the
-startup banner.
+and `--data-dir` to change those server values. Pass `--no-banner` to `nova-server` to suppress
+the startup banner.
 
 `nova-server` can also read a TOML config file:
 

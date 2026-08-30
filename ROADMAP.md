@@ -69,7 +69,7 @@ not a claim Nova makes today.
 - [x] Write acknowledgment after `sync_data`
 - [x] WAL replay on restart
 - [x] Timestamp-ordered in-memory range reads
-- [x] TCP server, line protocol, CLI, `PING`, `WRITE`, `RANGE`, and `INFO`
+- [x] TCP server, line protocol, interactive CLI, `PING`, `WRITE`, `BATCH`, `RANGE`, and `INFO`
 - [x] Recovery test proving write → close → reopen → read
 
 ### Required to complete the slice
