@@ -69,21 +69,21 @@ not a claim Nova makes today.
 - [x] Write acknowledgment after `sync_data`
 - [x] WAL replay on restart
 - [x] Timestamp-ordered in-memory range reads
-- [x] TCP server, line protocol, CLI, `PING`, `WRITE`, `RANGE`, and `INFO`
+- [x] TCP server, line protocol, interactive CLI, `PING`, `WRITE`, `BATCH`, `RANGE`, and `INFO`
 - [x] Recovery test proving write → close → reopen → read
 
 ### Required to complete the slice
 
-- [ ] End-to-end tests that launch the server and exercise real client connections
-- [ ] Clean shutdown with a final durability barrier
-- [ ] Torn/truncated WAL-tail detection and safe repair
-- [ ] Maximum frame, metric, request, and connection limits
-- [ ] Duplicate timestamp and out-of-order write semantics
-- [ ] Batch write command with atomicity rules
-- [ ] Config file plus environment and command-line precedence
-- [ ] Structured error codes rather than human-text-only errors
-- [ ] Version and build metadata in `INFO`
-- [ ] Graceful resource exhaustion behavior
+- [x] End-to-end tests that launch the server and exercise real client connections
+- [x] Clean shutdown with a final durability barrier
+- [x] Torn/truncated WAL-tail detection and safe repair
+- [x] Maximum frame, metric, request, and connection limits
+- [x] Duplicate timestamp and out-of-order write semantics
+- [x] Batch write command with atomicity rules
+- [x] Config file plus environment and command-line precedence
+- [x] Structured error codes rather than human-text-only errors
+- [x] Version and build metadata in `INFO`
+- [x] Graceful resource exhaustion behavior
 
 **Exit criteria**
 
@@ -358,4 +358,3 @@ Development can expand according to user demand:
 
 The open-source engine remains the foundation. Commercial offerings, if created, should fund the
 project without making the core database deliberately incomplete.
-
